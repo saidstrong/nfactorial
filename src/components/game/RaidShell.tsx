@@ -39,6 +39,7 @@ import {
   validateDebriefOutput,
   validateMissionOutput,
 } from "@/lib/ai/validation";
+import type { CoopRuntimeConfig } from "@/lib/coop/types";
 import { INITIAL_RAID_HUD } from "@/lib/game/constants";
 import type {
   RaidHudState,
@@ -65,7 +66,15 @@ const INITIAL_FEED: DirectorFeedEntry[] = [
   },
 ];
 
-export function RaidShell() {
+type RaidShellProps = {
+  multiplayer?: (CoopRuntimeConfig & { teammateLinked?: boolean }) | null;
+  onRaidEndExternal?: ((report: RaidEndReport) => void) | undefined;
+};
+
+export function RaidShell({
+  multiplayer = null,
+  onRaidEndExternal,
+}: RaidShellProps) {
   const [hud, setHud] = useState<RaidHudState>(INITIAL_RAID_HUD);
   const [restartKey, setRestartKey] = useState(0);
   const [mission, setMission] = useState<MissionBriefing>(AI_MISSION_FALLBACK);
@@ -106,7 +115,11 @@ export function RaidShell() {
     async function loadMission() {
       const nextMission = await requestAiDirector<MissionBriefing>(
         "/api/ai/mission",
-        { difficulty: "hard", mode: "solo", playerName: "Operator" },
+        {
+          difficulty: "hard",
+          mode: multiplayer ? "co-op" : "solo",
+          playerName: multiplayer?.localNickname ?? "Operator",
+        },
         AI_MISSION_FALLBACK,
         validateMissionOutput,
       );
@@ -130,7 +143,7 @@ export function RaidShell() {
     return () => {
       isCancelled = true;
     };
-  }, [pushFeed, restartKey]);
+  }, [multiplayer, pushFeed, restartKey]);
 
   function handleRestart() {
     feedKeysRef.current = new Set(INITIAL_FEED.map((entry) => entry.id));
@@ -243,6 +256,7 @@ export function RaidShell() {
 
   const handleRaidEnd = useCallback(
     (report: RaidEndReport) => {
+      onRaidEndExternal?.(report);
       setDebrief("AI Director compiling final mission report...");
       pushFeed({
         id: `result-${restartKey}-${report.result}`,
@@ -269,19 +283,41 @@ export function RaidShell() {
         });
       });
     },
-    [pushFeed, restartKey],
+    [onRaidEndExternal, pushFeed, restartKey],
   );
 
-  const hpPercent = Math.max(0, Math.round((hud.hp / hud.maxHp) * 100));
+  const isCoop = Boolean(multiplayer);
+  const safeMaxHp =
+    Number.isFinite(hud.maxHp) && hud.maxHp > 0 ? hud.maxHp : INITIAL_RAID_HUD.maxHp;
+  const safeHp = Number.isFinite(hud.hp)
+    ? Math.min(Math.max(0, hud.hp), safeMaxHp)
+    : 0;
+  const hpPercent =
+    safeMaxHp > 0 ? Math.max(0, Math.round((safeHp / safeMaxHp) * 100)) : 0;
+  const safeBossMaxHp =
+    Number.isFinite(hud.bossMaxHp) && hud.bossMaxHp > 0
+      ? hud.bossMaxHp
+      : INITIAL_RAID_HUD.bossMaxHp;
+  const safeBossHp = Number.isFinite(hud.bossHp)
+    ? Math.min(Math.max(0, hud.bossHp), safeBossMaxHp)
+    : 0;
   const bossHpPercent =
-    hud.bossMaxHp > 0
-      ? Math.max(0, Math.round((hud.bossHp / hud.bossMaxHp) * 100))
+    safeBossMaxHp > 0
+      ? Math.max(0, Math.round((safeBossHp / safeBossMaxHp) * 100))
       : 0;
+  const safeDashCooldownRemainingMs = Number.isFinite(hud.dashCooldownRemainingMs)
+    ? Math.max(0, hud.dashCooldownRemainingMs)
+    : 0;
   const dashLabel = hud.dashReady
     ? "Ready"
-    : `${Math.ceil(hud.dashCooldownRemainingMs / 100) / 10}s`;
+    : `${Math.ceil(safeDashCooldownRemainingMs / 100) / 10}s`;
   const isResultState = hud.status === "operator-down" || hud.status === "victory";
   const showBossHud = hud.status === "boss" || hud.status === "victory";
+  const teammateStatus = multiplayer?.teammateNickname
+    ? multiplayer.teammateLinked
+      ? "Linked"
+      : "Waiting"
+    : "Pending";
 
   return (
     <main className="min-h-screen px-4 py-5 text-white sm:px-6 lg:px-8">
@@ -304,11 +340,22 @@ export function RaidShell() {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div
+            className={[
+              "grid grid-cols-2 gap-3",
+              isCoop ? "sm:grid-cols-5" : "sm:grid-cols-4",
+            ].join(" ")}
+          >
             <HeaderMetric label="Room" value={`${hud.roomNumber}/${hud.totalRooms}`} />
             <HeaderMetric label="Weapon" value={hud.currentWeaponName} />
             <HeaderMetric label="Kills" value={hud.kills} />
             <HeaderMetric label="Status" value={getStatusLabel(hud.status)} />
+            {isCoop ? (
+              <HeaderMetric
+                label={multiplayer?.isHost ? "Role" : "Client"}
+                value={multiplayer?.roomCode ?? "Co-op"}
+              />
+            ) : null}
           </div>
         </header>
 
@@ -339,6 +386,7 @@ export function RaidShell() {
               key={restartKey}
               aiEventSelection={aiEventSelection}
               bossPhaseSelection={bossPhaseSelection}
+              multiplayer={multiplayer}
               onAiEventRequest={handleAiEventRequest}
               onBossPhaseRequest={handleBossPhaseRequest}
               onHudChange={setHud}
@@ -404,8 +452,8 @@ export function RaidShell() {
                       Operator HP
                     </p>
                     <p className="mt-1 text-4xl font-black text-white">
-                      {hud.hp}
-                      <span className="ml-2 text-lg text-cyan-100/55">/ {hud.maxHp}</span>
+                      {safeHp}
+                      <span className="ml-2 text-lg text-cyan-100/55">/ {safeMaxHp}</span>
                     </p>
                   </div>
                   <div className="text-right">
@@ -430,6 +478,38 @@ export function RaidShell() {
                 </div>
               </div>
             </section>
+
+            {isCoop ? (
+              <section className="panel px-5 py-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200/58">
+                      Co-op Link
+                    </p>
+                    <h3 className="font-display mt-2 text-xl font-black uppercase tracking-[0.08em] text-white">
+                      Room {multiplayer?.roomCode}
+                    </h3>
+                  </div>
+                  <div className="status-chip text-cyan-100/76">
+                    {multiplayer?.isHost ? "Host" : "Client"}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3">
+                  <MetricTile icon={Shield} label="Local Operator" value={multiplayer?.localNickname ?? "Operator"} />
+                  <MetricTile
+                    icon={Radar}
+                    label="Wingmate"
+                    value={multiplayer?.teammateNickname ?? "Awaiting join"}
+                  />
+                  <MetricTile
+                    icon={BrainCircuit}
+                    label="Link State"
+                    value={teammateStatus}
+                  />
+                </div>
+              </section>
+            ) : null}
 
             <section className="panel px-5 py-5">
               <div className="flex items-center justify-between gap-3">
@@ -516,7 +596,7 @@ export function RaidShell() {
                     icon={Crown}
                     label="Boss HP"
                     tone="warm"
-                    value={`${hud.bossHp}/${hud.bossMaxHp}`}
+                    value={`${safeBossHp}/${safeBossMaxHp}`}
                   />
                   <MetricTile
                     icon={Radar}

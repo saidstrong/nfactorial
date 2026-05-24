@@ -23,6 +23,12 @@ import type {
   BossPhaseSelection,
   RaidEndReport,
 } from "@/lib/ai/fallbacks";
+import type {
+  CoopPlayerShot,
+  CoopPlayerState,
+  CoopRuntimeConfig,
+  HostRaidSnapshot,
+} from "@/lib/coop/types";
 import { RAID_ROOMS } from "@/lib/game/rooms";
 import { getRewardOffers } from "@/lib/game/rewards";
 import type {
@@ -35,6 +41,7 @@ import type {
   UpgradeId,
   UpgradeOption,
   WeaponDefinition,
+  WeaponId,
 } from "@/lib/game/types";
 import { getUpgradeById } from "@/lib/game/upgrades";
 import { getWeaponById } from "@/lib/game/weapons";
@@ -56,11 +63,21 @@ type PhysicsEnemy = PhysicsBodyShape & { body: ArcadeBody };
 
 type BulletOwner = "player" | "enemy" | "boss";
 type PortalKind = "normal" | "boss";
+type PlayerDamageSource =
+  | "crawler_contact"
+  | "enemy_projectile"
+  | "drone_projectile"
+  | "elite_drone_projectile"
+  | "boss_projectile"
+  | "boss_shockwave"
+  | "boss_contact";
+type DamageSource = PlayerDamageSource | "player_projectile";
 
 type BulletSprite = PhysicsBodyShape & {
   bornAt: number;
   bulletShape: "orb" | "rail";
   damage: number;
+  damageSource: DamageSource;
   hitEnemyIds: Set<number>;
   owner: BulletOwner;
   pierceRemaining: number;
@@ -78,6 +95,19 @@ type EnemySprite = PhysicsEnemy & {
   scoreValue: number;
   shadow?: ShadowEllipse;
   speed: number;
+};
+
+type RemotePlayerSprite = PhysicsArc & {
+  hp: number;
+  isHost: boolean;
+  lastContactDamageAt: number;
+  lastSeenAt: number;
+  nickname: string;
+  nicknameLabel?: GameText;
+  playerId: string;
+  roomNumber: number;
+  shadow?: ShadowEllipse;
+  weaponId: WeaponId;
 };
 
 type BossSprite = PhysicsArc & {
@@ -105,12 +135,16 @@ type ShockwaveState = {
 type SceneControls = {
   applyAiEvent: (directive: AiEventDirective) => void;
   applyBossPhaseDirective: (selection: BossPhaseSelection) => void;
+  applyHostSnapshot: (snapshot: HostRaidSnapshot) => void;
+  applyRemotePlayerShot: (shot: CoopPlayerShot) => void;
+  applyRemotePlayerState: (state: CoopPlayerState) => void;
   applyRewardSelection: (selection: RewardSelection) => void;
 };
 
 type PhaserRaidGameProps = {
   aiEventSelection: AiEventSelection | null;
   bossPhaseSelection: BossPhaseSelection | null;
+  multiplayer?: CoopRuntimeConfig | null;
   onAiEventRequest: (request: AiEventRequest) => void;
   onBossPhaseRequest: (phase: 2 | 3, request: BossPhaseRequest) => void;
   onHudChange: (hud: RaidHudState) => void;
@@ -183,9 +217,20 @@ const ROOM_SPAWN_POINTS: Record<
   ],
 };
 
+const DEFAULT_PLAYER_DAMAGE_BY_SOURCE: Record<PlayerDamageSource, number> = {
+  boss_contact: RAID_BOSS.contactDamage,
+  boss_projectile: RAID_BOSS.aimedShotDamage,
+  boss_shockwave: RAID_BOSS.shockwaveDamage,
+  crawler_contact: RAID_CRAWLER.damage,
+  drone_projectile: RAID_DRONE.damage,
+  elite_drone_projectile: RAID_ELITE_DRONE.damage,
+  enemy_projectile: RAID_ENEMY_BULLET.damage,
+};
+
 export function PhaserRaidGame({
   aiEventSelection,
   bossPhaseSelection,
+  multiplayer = null,
   onAiEventRequest,
   onBossPhaseRequest,
   onHudChange,
@@ -216,6 +261,24 @@ export function PhaserRaidGame({
   }, [bossPhaseSelection]);
 
   useEffect(() => {
+    if (multiplayer?.incomingPlayerState) {
+      sceneControlsRef.current?.applyRemotePlayerState(multiplayer.incomingPlayerState);
+    }
+  }, [multiplayer?.incomingPlayerState]);
+
+  useEffect(() => {
+    if (multiplayer?.incomingPlayerShot) {
+      sceneControlsRef.current?.applyRemotePlayerShot(multiplayer.incomingPlayerShot);
+    }
+  }, [multiplayer?.incomingPlayerShot]);
+
+  useEffect(() => {
+    if (multiplayer?.incomingHostSnapshot) {
+      sceneControlsRef.current?.applyHostSnapshot(multiplayer.incomingHostSnapshot);
+    }
+  }, [multiplayer?.incomingHostSnapshot]);
+
+  useEffect(() => {
     let isMounted = true;
 
     async function bootGame() {
@@ -241,6 +304,8 @@ export function PhaserRaidGame({
         private roomGrid!: Graphics;
         private roomAccents!: Graphics;
         private roomPulse!: Graphics;
+        private snapshotEntityLayer!: Graphics;
+        private snapshotProjectileLayer!: Graphics;
         private boss?: BossSprite;
         private bossAura?: Graphics;
         private activePortal?: PortalSprite;
@@ -253,6 +318,11 @@ export function PhaserRaidGame({
         private keys!: Record<"W" | "A" | "S" | "D" | "SPACE" | "R", KeyboardKey>;
         private overlaySequence = 0;
         private portalEnterLocked = false;
+        private remotePlayers = new Map<string, RemotePlayerSprite>();
+        private latestHostSnapshot: HostRaidSnapshot | null = null;
+        private lastLocalStateBroadcastAt = 0;
+        private lastHostSnapshotBroadcastAt = 0;
+        private hostSnapshotSequence = 0;
         private hp = RAID_PLAYER.maxHp;
         private maxHp = RAID_PLAYER.maxHp;
         private score = 0;
@@ -338,14 +408,30 @@ export function PhaserRaidGame({
             applyAiEvent: (directive) => this.applyAiEvent(directive),
             applyBossPhaseDirective: (selection) =>
               this.applyBossPhaseDirective(selection),
+            applyHostSnapshot: (snapshot) => this.applyHostSnapshot(snapshot),
+            applyRemotePlayerShot: (shot) => this.applyRemotePlayerShot(shot),
+            applyRemotePlayerState: (state) => this.applyRemotePlayerState(state),
             applyRewardSelection: (selection) =>
               this.applyRewardSelection(selection),
           };
 
-          this.enterRoomIntro(0);
+          if (this.isGuestClient()) {
+            this.raidStatus = "room-intro";
+            this.statusText = "Waiting for host snapshot.";
+            this.positionPlayerForRoom();
+            this.showStateText(
+              "CO-OP LINK ESTABLISHED",
+              "Waiting for the host to open the chamber route.",
+            );
+            this.emitHud(true);
+          } else {
+            this.enterRoomIntro(0);
+          }
         }
 
         update(time: number) {
+          this.sanitizeLocalVitals();
+
           if (this.raidStatus === "operator-down" || this.raidStatus === "victory") {
             if (PhaserLib.Input.Keyboard.JustDown(this.keys.R)) {
               this.scene.restart();
@@ -354,7 +440,11 @@ export function PhaserRaidGame({
             this.syncVisualEffects();
             this.renderProjectileTrails();
             this.renderRoomOverlay();
+            this.renderHostSnapshot();
             this.renderPortalPulse(time);
+            this.pruneRemotePlayers(time);
+            this.broadcastLocalPlayerState(time);
+            this.broadcastHostSnapshot(time);
             this.emitHud();
             return;
           }
@@ -367,7 +457,11 @@ export function PhaserRaidGame({
           ) {
             this.syncVisualEffects();
             this.renderRoomOverlay();
+            this.renderHostSnapshot();
             this.renderPortalPulse(time);
+            this.pruneRemotePlayers(time);
+            this.broadcastLocalPlayerState(time);
+            this.broadcastHostSnapshot(time);
             this.emitHud();
             return;
           }
@@ -375,20 +469,28 @@ export function PhaserRaidGame({
           this.updatePlayerMovement(time);
           this.updateAimLine();
           this.handleShooting(time);
-          this.updateEnemies(time);
-          this.updateBoss(time);
-          this.updateShockwave(time);
+
+          if (!this.isGuestClient()) {
+            this.updateEnemies(time);
+            this.updateBoss(time);
+            this.updateShockwave(time);
+            this.updateEnemyBullets(time);
+          }
+
           this.updatePlayerBullets(time);
-          this.updateEnemyBullets(time);
           this.syncVisualEffects();
           this.renderProjectileTrails();
           this.renderRoomOverlay();
+          this.renderHostSnapshot();
           this.renderPortalPulse(time);
 
-          if (this.raidStatus === "running") {
+          if (!this.isGuestClient() && this.raidStatus === "running") {
             this.checkRoomClear();
           }
 
+          this.pruneRemotePlayers(time);
+          this.broadcastLocalPlayerState(time);
+          this.broadcastHostSnapshot(time);
           this.emitHud();
         }
 
@@ -439,6 +541,16 @@ export function PhaserRaidGame({
           this.rewardPresentedForRoom = -1;
           this.portalEnterLocked = false;
           this.overlaySequence = 0;
+          this.latestHostSnapshot = null;
+          this.lastLocalStateBroadcastAt = 0;
+          this.lastHostSnapshotBroadcastAt = 0;
+          this.hostSnapshotSequence = 0;
+          this.remotePlayers.forEach((player) => {
+            player.nicknameLabel?.destroy();
+            player.shadow?.destroy();
+            player.destroy();
+          });
+          this.remotePlayers.clear();
           onRewardOffer(null);
         }
 
@@ -448,6 +560,10 @@ export function PhaserRaidGame({
           this.roomGrid = this.add.graphics();
           this.roomAccents = this.add.graphics();
           this.roomPulse = this.add.graphics();
+          this.snapshotEntityLayer = this.add.graphics();
+          this.snapshotEntityLayer.setDepth(4);
+          this.snapshotProjectileLayer = this.add.graphics();
+          this.snapshotProjectileLayer.setDepth(6);
           this.trailLayer = this.add.graphics();
           this.trailLayer.setDepth(2);
           this.aimLine = this.add.graphics();
@@ -481,10 +597,449 @@ export function PhaserRaidGame({
           this.player.setDepth(5);
 
           this.physics.add.existing(this.player);
-          this.player.body.setCircle(RAID_PLAYER.radius);
-          this.player.body.setCollideWorldBounds(true);
-          this.player.body.setAllowGravity(false);
-          this.player.body.setMaxVelocity(RAID_PLAYER.dashSpeed);
+          this.ensurePlayerBody();
+        }
+
+        private ensurePlayerBody() {
+          if (!this.player) {
+            return undefined;
+          }
+
+          let body = this.player.body as ArcadeBody | undefined;
+
+          if (!body) {
+            this.physics.add.existing(this.player);
+            body = this.player.body as ArcadeBody | undefined;
+          }
+
+          if (!body) {
+            return undefined;
+          }
+
+          body.setCircle(RAID_PLAYER.radius);
+          body.setCollideWorldBounds(true);
+          body.setAllowGravity(false);
+          body.setMaxVelocity(RAID_PLAYER.dashSpeed);
+
+          return body;
+        }
+
+        private isMultiplayerEnabled() {
+          return Boolean(multiplayer);
+        }
+
+        private isHostClient() {
+          return Boolean(multiplayer?.isHost);
+        }
+
+        private isGuestClient() {
+          return Boolean(multiplayer && !multiplayer.isHost);
+        }
+
+        private isRaidLive() {
+          return this.raidStatus !== "operator-down" && this.raidStatus !== "victory";
+        }
+
+        private getSafeMaxHp(rawMaxHp: number | undefined = this.maxHp) {
+          return Number.isFinite(rawMaxHp) && rawMaxHp > 0
+            ? rawMaxHp
+            : RAID_PLAYER.maxHp;
+        }
+
+        private getClampedHp(rawHp: number | undefined, fallbackHp: number) {
+          const maxHp = this.getSafeMaxHp();
+
+          if (!Number.isFinite(rawHp)) {
+            return PhaserLib.Math.Clamp(fallbackHp, 0, maxHp);
+          }
+
+          return PhaserLib.Math.Clamp(rawHp as number, 0, maxHp);
+        }
+
+        private getDefaultDamageForSource(
+          source: DamageSource,
+          owner: BulletOwner = "enemy",
+        ) {
+          if (source === "player_projectile") {
+            return RAID_PLAYER.bulletDamage;
+          }
+
+          if (source === "enemy_projectile") {
+            return owner === "boss"
+              ? RAID_BOSS.aimedShotDamage
+              : RAID_ENEMY_BULLET.damage;
+          }
+
+          return DEFAULT_PLAYER_DAMAGE_BY_SOURCE[source];
+        }
+
+        private getSafeProjectileDamage(
+          rawDamage: number | undefined,
+          source: DamageSource,
+          owner: BulletOwner,
+        ) {
+          const numericDamage = Number(rawDamage);
+
+          return Number.isFinite(numericDamage)
+            ? numericDamage
+            : this.getDefaultDamageForSource(source, owner);
+        }
+
+        private getSafeIncomingDamage(
+          rawDamage: number | undefined,
+          source: PlayerDamageSource,
+        ) {
+          const numericDamage = Number(rawDamage);
+
+          return Number.isFinite(numericDamage) && numericDamage > 0
+            ? numericDamage
+            : this.getDefaultDamageForSource(source);
+        }
+
+        private sanitizeLocalVitals() {
+          this.maxHp = this.getSafeMaxHp(this.maxHp);
+          const hpWasFinite = Number.isFinite(this.hp);
+          this.hp = hpWasFinite ? this.getClampedHp(this.hp, 0) : 0;
+
+          // Never allow undefined damage or bad snapshot data to poison HP.
+          // NaN HP breaks `<= 0` checks and leaves the raid half-dead.
+          if (!hpWasFinite && this.isRaidLive()) {
+            this.statusText = "Integrity fault detected. Operator down.";
+            this.endRaid();
+            return;
+          }
+
+          if (this.hp <= 0 && this.isRaidLive()) {
+            this.endRaid();
+          }
+        }
+
+        private applyRemotePlayerState(state: CoopPlayerState) {
+          if (
+            !this.isMultiplayerEnabled() ||
+            !multiplayer ||
+            state.playerId === multiplayer.localPlayerId
+          ) {
+            return;
+          }
+
+          let remotePlayer = this.remotePlayers.get(state.playerId);
+          const safeRemoteHp = this.getClampedHp(state.hp, this.getSafeMaxHp());
+
+          if (!remotePlayer) {
+            const shadow = this.add.ellipse(state.x, state.y + 15, 34, 16, 0x000000, 0.28);
+            shadow.setDepth(3);
+            remotePlayer = this.add.circle(
+              state.x,
+              state.y,
+              RAID_PLAYER.radius,
+              state.playerId === multiplayer.localPlayerId ? 0x58f3ff : 0x8d7cff,
+              1,
+            ) as RemotePlayerSprite;
+            remotePlayer.setStrokeStyle(3, 0xf5f0ff, 0.82);
+            remotePlayer.setDepth(5);
+            remotePlayer.shadow = shadow;
+            remotePlayer.nicknameLabel = this.add
+              .text(state.x, state.y - 26, state.nickname, {
+                color: "#d3cbff",
+                fontFamily: "Segoe UI, Arial, sans-serif",
+                fontSize: "12px",
+                fontStyle: "bold",
+              })
+              .setOrigin(0.5)
+              .setDepth(7);
+            remotePlayer.playerId = state.playerId;
+            remotePlayer.nickname = state.nickname;
+            remotePlayer.isHost = state.playerId !== multiplayer.localPlayerId && !this.isHostClient();
+            remotePlayer.lastContactDamageAt = 0;
+            this.remotePlayers.set(state.playerId, remotePlayer);
+          }
+
+          remotePlayer.setPosition(state.x, state.y);
+          remotePlayer.setRotation(state.rotation);
+          remotePlayer.hp = safeRemoteHp;
+          remotePlayer.roomNumber =
+            Number.isFinite(state.roomNumber) && state.roomNumber > 0
+              ? state.roomNumber
+              : this.getCurrentRoom().number;
+          remotePlayer.weaponId = state.weaponId;
+          remotePlayer.lastSeenAt = this.time.now;
+          remotePlayer.nickname = state.nickname;
+          remotePlayer.nicknameLabel?.setText(state.nickname);
+          remotePlayer.nicknameLabel?.setPosition(state.x, state.y - 26);
+          remotePlayer.nicknameLabel?.setVisible(safeRemoteHp > 0);
+          remotePlayer.shadow?.setPosition(state.x, state.y + 15);
+          remotePlayer.setVisible(safeRemoteHp > 0);
+          remotePlayer.shadow?.setVisible(safeRemoteHp > 0);
+        }
+
+        private applyRemotePlayerShot(shot: CoopPlayerShot) {
+          if (
+            !this.isMultiplayerEnabled() ||
+            !multiplayer ||
+            shot.playerId === multiplayer.localPlayerId
+          ) {
+            return;
+          }
+
+          const remotePlayer = this.remotePlayers.get(shot.playerId);
+          const weapon = getWeaponById(shot.weaponId);
+          const originX = remotePlayer?.x ?? shot.x;
+          const originY = remotePlayer?.y ?? shot.y;
+          const angles = this.getShotAngles(shot.angle, weapon);
+
+          angles.forEach((angle) => {
+            this.spawnBullet({
+              angle,
+              damage: this.isHostClient()
+                ? Math.round(weapon.damage * this.roomBulletDamageMultiplier)
+                : 0,
+              damageSource: "player_projectile",
+              owner: "player",
+              pierceRemaining: weapon.pierce + this.bulletPierceBonus,
+              projectileRadius: weapon.projectileRadius,
+              projectileShape: weapon.projectileShape,
+              speed: weapon.projectileSpeed,
+              tint: weapon.tint,
+              trailLength: weapon.trailLength,
+              x: originX + Math.cos(angle) * 22,
+              y: originY + Math.sin(angle) * 22,
+            });
+          });
+        }
+
+        private applyHostSnapshot(snapshot: HostRaidSnapshot) {
+          if (!this.isGuestClient() || !multiplayer) {
+            return;
+          }
+
+          this.latestHostSnapshot = snapshot;
+          const nextRoomIndex = Math.max(0, Math.min(RAID_ROOMS.length - 1, snapshot.roomNumber - 1));
+
+          if (nextRoomIndex !== this.currentRoomIndex) {
+            this.currentRoomIndex = nextRoomIndex;
+            this.drawRoomTheme(this.getCurrentRoom());
+            this.clearStateOverlay();
+          }
+
+          this.raidStatus = snapshot.status;
+          this.statusText = snapshot.statusText;
+          this.roomsCleared = snapshot.roomsCleared;
+          this.score = snapshot.score;
+          this.kills = snapshot.kills;
+          this.damageTaken = snapshot.damageTaken;
+          this.selectedUpgrades = snapshot.selectedUpgrades;
+          this.bossModeHistory = snapshot.bossModeHistory;
+          this.currentWeapon = getWeaponById(snapshot.currentWeaponId);
+
+          const snapshotMaxHp = snapshot.maxHpByPlayerId[multiplayer.localPlayerId];
+          if (Number.isFinite(snapshotMaxHp) && snapshotMaxHp > 0) {
+            this.maxHp = snapshotMaxHp;
+          }
+
+          const snapshotHp = snapshot.playerHpById[multiplayer.localPlayerId];
+          if (Number.isFinite(snapshotHp)) {
+            this.hp = this.getClampedHp(snapshotHp, 0);
+          } else if (snapshot.status === "operator-down") {
+            this.hp = 0;
+          }
+
+          this.sanitizeLocalVitals();
+
+          if (
+            !this.raidEndReported &&
+            (snapshot.status === "victory" || snapshot.status === "operator-down")
+          ) {
+            this.reportRaidEnd(snapshot.status === "victory" ? "victory" : "wipeout");
+          }
+        }
+
+        private pruneRemotePlayers(time: number) {
+          this.remotePlayers.forEach((player, playerId) => {
+            if (time - player.lastSeenAt <= 3500) {
+              return;
+            }
+
+            player.nicknameLabel?.destroy();
+            player.shadow?.destroy();
+            player.destroy();
+            this.remotePlayers.delete(playerId);
+          });
+        }
+
+        private broadcastLocalPlayerState(time: number) {
+          if (!this.isMultiplayerEnabled() || !multiplayer?.onLocalPlayerState) {
+            return;
+          }
+
+          if (time - this.lastLocalStateBroadcastAt < 80) {
+            return;
+          }
+
+          this.lastLocalStateBroadcastAt = time;
+          const safeHp = this.getClampedHp(this.hp, 0);
+          multiplayer.onLocalPlayerState({
+            hp: safeHp,
+            nickname: multiplayer.localNickname,
+            playerId: multiplayer.localPlayerId,
+            roomNumber: this.getCurrentRoom().number,
+            rotation: this.player.rotation,
+            sequence: Math.round(time),
+            status: this.raidStatus,
+            weaponId: this.currentWeapon.id,
+            x: this.player.x,
+            y: this.player.y,
+          });
+        }
+
+        private broadcastHostSnapshot(time: number) {
+          if (!this.isHostClient() || !multiplayer?.onHostSnapshot) {
+            return;
+          }
+
+          if (time - this.lastHostSnapshotBroadcastAt < 110) {
+            return;
+          }
+
+          this.lastHostSnapshotBroadcastAt = time;
+          this.hostSnapshotSequence += 1;
+          const room = this.getCurrentRoom();
+
+          multiplayer.onHostSnapshot({
+            boss: this.boss
+              ? {
+                  active: this.boss.active,
+                  hp: this.boss.hp,
+                  maxHp: this.boss.maxHp,
+                  mode: this.bossMode,
+                  phase: this.bossPhase,
+                  shockwaveRadius: this.getActiveShockwaveRadius(),
+                  x: this.boss.x,
+                  y: this.boss.y,
+                }
+              : null,
+            bossModeHistory: this.bossModeHistory,
+            currentWeaponId: this.currentWeapon.id,
+            currentWeaponName: this.currentWeapon.name,
+            damageTaken: this.damageTaken,
+            enemies: this.enemies.getChildren().map((enemyObject) => {
+              const enemy = enemyObject as EnemySprite;
+
+              return {
+                enemyId: enemy.enemyId,
+                hp: enemy.hp,
+                kind: enemy.kind,
+                rotation: enemy.rotation,
+                x: enemy.x,
+                y: enemy.y,
+              };
+            }),
+            enemiesAlive: this.enemies.countActive(true),
+            enemyBullets: this.enemyBullets.getChildren().map((bulletObject) => {
+              const bullet = bulletObject as BulletSprite;
+              return {
+                angle: Math.atan2(bullet.body.velocity.y, bullet.body.velocity.x),
+                owner: bullet.owner === "boss" ? "boss" : "enemy",
+                radius: bullet instanceof PhaserLib.GameObjects.Arc ? bullet.radius : 6,
+                x: bullet.x,
+                y: bullet.y,
+              };
+            }),
+            kills: this.kills,
+            maxHpByPlayerId: this.getMaxHpByPlayerId(),
+            playerHpById: this.getPlayerHpById(),
+            players: this.getSnapshotPlayers(),
+            portal: this.activePortal
+              ? {
+                  active: this.activePortal.active,
+                  kind: this.activePortal.kind,
+                  x: this.activePortal.x,
+                  y: this.activePortal.y,
+                }
+              : null,
+            roomName: room.name,
+            roomNumber: room.number,
+            roomsCleared: this.roomsCleared,
+            score: this.score,
+            selectedUpgrades: this.selectedUpgrades,
+            sequence: this.hostSnapshotSequence,
+            status: this.raidStatus,
+            statusText: this.statusText,
+          });
+        }
+
+        private getSnapshotPlayers() {
+          const safeLocalHp = this.getClampedHp(this.hp, 0);
+          const players = [
+            {
+              hp: safeLocalHp,
+              nickname: multiplayer?.localNickname ?? "Operator",
+              playerId: multiplayer?.localPlayerId ?? "local",
+              rotation: this.player.rotation,
+              weaponId: this.currentWeapon.id,
+              x: this.player.x,
+              y: this.player.y,
+            },
+          ];
+
+          this.remotePlayers.forEach((player) => {
+            players.push({
+              hp: this.getClampedHp(player.hp, this.getSafeMaxHp()),
+              nickname: player.nickname,
+              playerId: player.playerId,
+              rotation: player.rotation,
+              weaponId: player.weaponId,
+              x: player.x,
+              y: player.y,
+            });
+          });
+
+          return players;
+        }
+
+        private getPlayerHpById() {
+          const output: Record<string, number> = {};
+
+          if (multiplayer) {
+            output[multiplayer.localPlayerId] = this.getClampedHp(this.hp, 0);
+          }
+
+          this.remotePlayers.forEach((player) => {
+            output[player.playerId] = this.getClampedHp(
+              player.hp,
+              this.getSafeMaxHp(),
+            );
+          });
+
+          return output;
+        }
+
+        private getMaxHpByPlayerId() {
+          const output: Record<string, number> = {};
+          const safeMaxHp = this.getSafeMaxHp();
+
+          if (multiplayer) {
+            output[multiplayer.localPlayerId] = safeMaxHp;
+          }
+
+          this.remotePlayers.forEach((player) => {
+            output[player.playerId] = safeMaxHp;
+          });
+
+          return output;
+        }
+
+        private getActiveShockwaveRadius() {
+          if (!this.activeShockwave || !this.boss) {
+            return null;
+          }
+
+          const progress = Math.min(
+            1,
+            (this.time.now - this.activeShockwave.startedAt) / this.activeShockwave.durationMs,
+          );
+
+          return RAID_BOSS.radius + progress * this.activeShockwave.maxRadius;
         }
 
         private getCurrentRoom() {
@@ -492,9 +1047,15 @@ export function PhaserRaidGame({
         }
 
         private positionPlayerForRoom() {
-          this.player.body.stop();
+          const body = this.ensurePlayerBody();
+
+          if (!body) {
+            return;
+          }
+
+          body.stop();
           this.player.setPosition(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT - 122);
-          this.player.body.reset(this.player.x, this.player.y);
+          body.reset(this.player.x, this.player.y);
         }
 
         private drawRoomTheme(room: RaidRoomDefinition) {
@@ -643,8 +1204,128 @@ export function PhaserRaidGame({
           });
         }
 
+        private renderHostSnapshot() {
+          this.snapshotEntityLayer.clear();
+          this.snapshotProjectileLayer.clear();
+
+          if (!this.isGuestClient() || !this.latestHostSnapshot) {
+            return;
+          }
+
+          const snapshot = this.latestHostSnapshot;
+
+          snapshot.enemies.forEach((enemy) => {
+            const fillColor =
+              enemy.kind === "crawler"
+                ? 0xff5a1f
+                : enemy.kind === "elite-drone"
+                  ? 0x7f1321
+                  : 0xb52512;
+            const strokeColor =
+              enemy.kind === "crawler"
+                ? 0xffb347
+                : enemy.kind === "elite-drone"
+                  ? 0xff7a6a
+                  : 0xffb347;
+
+            this.snapshotEntityLayer.fillStyle(0x000000, 0.28);
+            this.snapshotEntityLayer.fillEllipse(enemy.x, enemy.y + 14, 30, 14);
+            this.snapshotEntityLayer.lineStyle(3, strokeColor, 0.9);
+            this.snapshotEntityLayer.fillStyle(fillColor, 1);
+
+            if (enemy.kind === "crawler") {
+              this.snapshotEntityLayer.fillCircle(enemy.x, enemy.y, RAID_CRAWLER.radius);
+              this.snapshotEntityLayer.strokeCircle(enemy.x, enemy.y, RAID_CRAWLER.radius);
+            } else {
+              const size =
+                enemy.kind === "elite-drone"
+                  ? RAID_ELITE_DRONE.radius * 2
+                  : RAID_DRONE.radius * 2;
+              const half = size / 2;
+              const corners = [
+                rotatePoint(-half, -half, enemy.rotation),
+                rotatePoint(half, -half, enemy.rotation),
+                rotatePoint(half, half, enemy.rotation),
+                rotatePoint(-half, half, enemy.rotation),
+              ].map((point) => new PhaserLib.Math.Vector2(enemy.x + point.x, enemy.y + point.y));
+
+              this.snapshotEntityLayer.fillPoints(corners, true, true);
+              this.snapshotEntityLayer.strokePoints(corners, true, true);
+            }
+          });
+
+          if (snapshot.portal?.active) {
+            const portalColor = snapshot.portal.kind === "boss" ? 0xff6f3a : 0x58f3ff;
+            const ringColor = snapshot.portal.kind === "boss" ? 0xffb347 : 0xdffcff;
+            this.snapshotEntityLayer.fillStyle(0x000000, 0.3);
+            this.snapshotEntityLayer.fillEllipse(
+              snapshot.portal.x,
+              snapshot.portal.y + 20,
+              104,
+              30,
+            );
+            this.snapshotEntityLayer.fillStyle(portalColor, 0.16);
+            this.snapshotEntityLayer.fillCircle(
+              snapshot.portal.x,
+              snapshot.portal.y,
+              snapshot.portal.kind === "boss" ? 36 : 34,
+            );
+            this.snapshotEntityLayer.lineStyle(4, ringColor, 0.92);
+            this.snapshotEntityLayer.strokeCircle(
+              snapshot.portal.x,
+              snapshot.portal.y,
+              snapshot.portal.kind === "boss" ? 36 : 34,
+            );
+          }
+
+          if (snapshot.boss?.active) {
+            this.snapshotEntityLayer.fillStyle(0x000000, 0.34);
+            this.snapshotEntityLayer.fillEllipse(snapshot.boss.x, snapshot.boss.y + 22, 124, 46);
+            this.snapshotEntityLayer.fillStyle(0x4a0808, 1);
+            this.snapshotEntityLayer.lineStyle(5, 0xff5a1f, 0.95);
+            this.snapshotEntityLayer.fillCircle(snapshot.boss.x, snapshot.boss.y, RAID_BOSS.radius);
+            this.snapshotEntityLayer.strokeCircle(snapshot.boss.x, snapshot.boss.y, RAID_BOSS.radius);
+            this.snapshotEntityLayer.lineStyle(3, 0xff5a1f, 0.24);
+            this.snapshotEntityLayer.strokeCircle(snapshot.boss.x, snapshot.boss.y, RAID_BOSS.radius + 22);
+            this.snapshotEntityLayer.lineStyle(2, 0xffb347, 0.18);
+            this.snapshotEntityLayer.strokeCircle(snapshot.boss.x, snapshot.boss.y, RAID_BOSS.radius + 36);
+
+            if (snapshot.boss.shockwaveRadius) {
+              this.snapshotProjectileLayer.lineStyle(7, 0xffb347, 0.52);
+              this.snapshotProjectileLayer.strokeCircle(
+                snapshot.boss.x,
+                snapshot.boss.y,
+                snapshot.boss.shockwaveRadius,
+              );
+              this.snapshotProjectileLayer.lineStyle(2, 0xff2d1f, 0.4);
+              this.snapshotProjectileLayer.strokeCircle(
+                snapshot.boss.x,
+                snapshot.boss.y,
+                Math.max(0, snapshot.boss.shockwaveRadius - 26),
+              );
+            }
+          }
+
+          snapshot.enemyBullets.forEach((bullet) => {
+            const color = bullet.owner === "boss" ? 0xff5b39 : 0xff8f47;
+            this.snapshotProjectileLayer.fillStyle(color, 1);
+            this.snapshotProjectileLayer.lineStyle(2, 0xffd1aa, 0.8);
+            this.snapshotProjectileLayer.fillCircle(bullet.x, bullet.y, bullet.radius);
+            this.snapshotProjectileLayer.strokeCircle(bullet.x, bullet.y, bullet.radius);
+            this.snapshotProjectileLayer.lineStyle(3, color, 0.24);
+            this.snapshotProjectileLayer.beginPath();
+            this.snapshotProjectileLayer.moveTo(bullet.x, bullet.y);
+            this.snapshotProjectileLayer.lineTo(
+              bullet.x - Math.cos(bullet.angle) * 18,
+              bullet.y - Math.sin(bullet.angle) * 18,
+            );
+            this.snapshotProjectileLayer.strokePath();
+          });
+        }
+
         private enterRoomIntro(roomIndex: number) {
           const room = RAID_ROOMS[roomIndex];
+          const body = this.ensurePlayerBody();
 
           this.currentRoomIndex = roomIndex;
           this.raidStatus = "room-intro";
@@ -656,7 +1337,9 @@ export function PhaserRaidGame({
           this.clearRoomEventModifiers(room.id === "surge-chamber");
           this.drawRoomTheme(room);
           this.positionPlayerForRoom();
-          this.player.body.enable = true;
+          if (body) {
+            body.enable = true;
+          }
 
           this.showStateText(room.introTitle, room.introText);
           this.cameras.main.flash(
@@ -688,13 +1371,17 @@ export function PhaserRaidGame({
         }
 
         private startCombatRoom(room: RaidRoomDefinition) {
+          const body = this.ensurePlayerBody();
+
           this.raidStatus = "running";
           this.statusText = `${room.name} breach active.`;
           this.clearStateOverlay();
           this.clearPortal();
           this.clearRoomCombat();
-          this.player.body.enable = true;
-          this.player.body.stop();
+          if (body) {
+            body.enable = true;
+            body.stop();
+          }
 
           const extraDrones =
             room.id === "surge-chamber" && this.roomEventModifier === "DRONE_SWARM" ? 2 : 0;
@@ -716,6 +1403,7 @@ export function PhaserRaidGame({
 
         private enterRewardDraft() {
           const room = this.getCurrentRoom();
+          const body = this.ensurePlayerBody();
 
           if (this.rewardPresentedForRoom === room.number) {
             return;
@@ -724,7 +1412,7 @@ export function PhaserRaidGame({
           this.rewardPresentedForRoom = room.number;
           this.raidStatus = "reward";
           this.statusText = `${room.name} cleared. Choose a raid reward.`;
-          this.player.body.stop();
+          body?.stop();
           this.clearProjectiles();
           this.showStateText("ROOM CLEARED", "Choose one raid reward to continue.");
           onRewardOffer(
@@ -771,10 +1459,12 @@ export function PhaserRaidGame({
         }
 
         private enterAiEventIntermission() {
+          const body = this.ensurePlayerBody();
+
           this.raidStatus = "ai-event";
           this.surgeEventTriggered = true;
           this.statusText = "AI Director analyzing Surge Chamber instability.";
-          this.player.body.stop();
+          body?.stop();
           this.clearProjectiles();
           this.showStateText(
             "AI DIRECTOR UPLINK",
@@ -924,10 +1614,11 @@ export function PhaserRaidGame({
         private enterPortal(kind: PortalKind) {
           const nextRoomIndex = Math.min(this.currentRoomIndex + 1, RAID_ROOMS.length - 1);
           const color = kind === "boss" ? 0xff7848 : 0x58f3ff;
+          const body = this.ensurePlayerBody();
 
           this.clearRoomCombat();
           this.clearProjectiles();
-          this.player.body.stop();
+          body?.stop();
           this.activePortal?.aura?.clear();
           this.emitBurst(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2, color, 14);
           this.cameras.main.shake(kind === "boss" ? 180 : 120, kind === "boss" ? 0.006 : 0.004);
@@ -949,6 +1640,17 @@ export function PhaserRaidGame({
         }
 
         private updatePlayerMovement(time: number) {
+          const body = this.ensurePlayerBody();
+
+          if (!this.player || !body) {
+            return;
+          }
+
+          if (this.hp <= 0) {
+            body.setVelocity(0, 0);
+            return;
+          }
+
           if (time < this.dashUntil) {
             return;
           }
@@ -968,13 +1670,19 @@ export function PhaserRaidGame({
 
           if (move.lengthSq() > 0) {
             move.normalize().scale(RAID_PLAYER.speed);
-            this.player.body.setVelocity(move.x, move.y);
+            body.setVelocity(move.x, move.y);
           } else {
-            this.player.body.setVelocity(0, 0);
+            body.setVelocity(0, 0);
           }
         }
 
         private tryDash(time: number, move: import("phaser").Math.Vector2) {
+          const body = this.ensurePlayerBody();
+
+          if (!this.player || !body) {
+            return;
+          }
+
           if (time - this.lastDashAt < this.getDashCooldownMs()) {
             return;
           }
@@ -991,7 +1699,7 @@ export function PhaserRaidGame({
           }
 
           dashDirection.normalize().scale(RAID_PLAYER.dashSpeed);
-          this.player.body.setVelocity(dashDirection.x, dashDirection.y);
+          body.setVelocity(dashDirection.x, dashDirection.y);
           this.lastDashAt = time;
           this.dashUntil = time + RAID_PLAYER.dashDurationMs;
         }
@@ -1042,7 +1750,7 @@ export function PhaserRaidGame({
         }
 
         private handleShooting(time: number) {
-          if (this.raidStatus !== "running" && this.raidStatus !== "boss") {
+          if (this.hp <= 0 || (this.raidStatus !== "running" && this.raidStatus !== "boss")) {
             return;
           }
 
@@ -1071,6 +1779,7 @@ export function PhaserRaidGame({
             this.spawnBullet({
               angle,
               damage: isCritical ? shotDamage * 2 : shotDamage,
+              damageSource: "player_projectile",
               owner: "player",
               pierceRemaining: this.getPlayerPierce(),
               projectileRadius: this.currentWeapon.projectileRadius,
@@ -1085,6 +1794,17 @@ export function PhaserRaidGame({
           });
 
           this.lastShotAt = time;
+
+          if (this.isMultiplayerEnabled() && multiplayer?.onLocalPlayerShot) {
+            multiplayer.onLocalPlayerShot({
+              angle: baseAngle,
+              playerId: multiplayer.localPlayerId,
+              sequence: Math.round(time),
+              weaponId: this.currentWeapon.id,
+              x: this.player.x,
+              y: this.player.y,
+            });
+          }
         }
 
         private getShotAngles(baseAngle: number, weapon: WeaponDefinition) {
@@ -1103,6 +1823,7 @@ export function PhaserRaidGame({
         private spawnBullet({
           angle,
           damage,
+          damageSource,
           owner,
           pierceRemaining,
           projectileRadius,
@@ -1115,6 +1836,7 @@ export function PhaserRaidGame({
         }: {
           angle: number;
           damage: number;
+          damageSource?: DamageSource;
           owner: BulletOwner;
           pierceRemaining: number;
           projectileRadius: number;
@@ -1125,6 +1847,18 @@ export function PhaserRaidGame({
           x: number;
           y: number;
         }) {
+          const resolvedDamageSource =
+            damageSource ??
+            (owner === "player"
+              ? "player_projectile"
+              : owner === "boss"
+                ? "boss_projectile"
+                : "enemy_projectile");
+          const resolvedDamage = this.getSafeProjectileDamage(
+            damage,
+            resolvedDamageSource,
+            owner,
+          );
           const fillColor =
             owner === "player" ? tint : owner === "boss" ? 0xff4a2e : 0xff7a3c;
           const strokeColor =
@@ -1149,7 +1883,8 @@ export function PhaserRaidGame({
 
           bullet.setStrokeStyle(2, strokeColor, 0.95);
           bullet.setRotation(angle);
-          bullet.damage = damage;
+          bullet.damage = resolvedDamage;
+          bullet.damageSource = resolvedDamageSource;
           bullet.owner = owner;
           bullet.pierceRemaining = pierceRemaining;
           bullet.hitEnemyIds = new Set();
@@ -1277,34 +2012,129 @@ export function PhaserRaidGame({
           return pattern[(index + offset) % pattern.length] ?? pattern[0];
         }
 
+        private getCombatTargets() {
+          const targets: Array<{
+            hp: number;
+            playerId: string;
+            sprite: PhysicsArc | RemotePlayerSprite;
+            x: number;
+            y: number;
+          }> = [];
+
+          if (this.hp > 0) {
+            targets.push({
+              hp: this.hp,
+              playerId: multiplayer?.localPlayerId ?? "local",
+              sprite: this.player,
+              x: this.player.x,
+              y: this.player.y,
+            });
+          }
+
+          this.remotePlayers.forEach((player) => {
+            if (
+              player.hp <= 0 ||
+              player.roomNumber !== this.getCurrentRoom().number ||
+              this.time.now - player.lastSeenAt > 2500
+            ) {
+              return;
+            }
+
+            targets.push({
+              hp: player.hp,
+              playerId: player.playerId,
+              sprite: player,
+              x: player.x,
+              y: player.y,
+            });
+          });
+
+          return targets;
+        }
+
+        private getClosestCombatTarget(x: number, y: number) {
+          const targets = this.getCombatTargets();
+
+          if (targets.length === 0) {
+            return null;
+          }
+
+          let bestTarget = targets[0];
+          let bestDistance = PhaserLib.Math.Distance.Between(x, y, bestTarget.x, bestTarget.y);
+
+          for (let index = 1; index < targets.length; index += 1) {
+            const target = targets[index];
+            const distance = PhaserLib.Math.Distance.Between(x, y, target.x, target.y);
+
+            if (distance < bestDistance) {
+              bestTarget = target;
+              bestDistance = distance;
+            }
+          }
+
+          return bestTarget;
+        }
+
+        private applyRemotePlayerDamage(
+          playerId: string,
+          rawDamage: number | undefined,
+          source: PlayerDamageSource,
+        ) {
+          const remotePlayer = this.remotePlayers.get(playerId);
+
+          if (!remotePlayer || remotePlayer.hp <= 0) {
+            return;
+          }
+
+          const damage = this.getSafeIncomingDamage(rawDamage, source);
+          const currentHp = this.getClampedHp(remotePlayer.hp, this.getSafeMaxHp());
+          remotePlayer.hp = Math.max(0, currentHp - Math.min(currentHp, damage));
+          remotePlayer.setFillStyle(0xff8f6b, 1);
+          remotePlayer.shadow?.setFillStyle(0x2b0805, 0.42);
+          remotePlayer.setVisible(remotePlayer.hp > 0);
+          remotePlayer.shadow?.setVisible(remotePlayer.hp > 0);
+          remotePlayer.nicknameLabel?.setVisible(remotePlayer.hp > 0);
+          this.time.delayedCall(90, () => {
+            if (remotePlayer.active) {
+              remotePlayer.setFillStyle(0x8d7cff, 1);
+              remotePlayer.shadow?.setFillStyle(0x000000, 0.3);
+            }
+          });
+        }
+
         private updateEnemies(time: number) {
           this.enemies.getChildren().forEach((enemyObject: GameObject) => {
             const enemy = enemyObject as EnemySprite;
+            const target = this.getClosestCombatTarget(enemy.x, enemy.y);
 
-            if (!enemy.active) {
+            if (!enemy.active || !target) {
               return;
             }
 
             if (enemy.kind === "crawler") {
-              this.physics.moveToObject(enemy, this.player, enemy.speed);
+              this.physics.moveTo(enemy, target.x, target.y, enemy.speed);
               return;
             }
 
-            this.updateDrone(enemy, time);
+            this.updateDrone(enemy, time, target.x, target.y);
           });
+
+          if (this.isHostClient()) {
+            this.updateRemotePlayerContactDamage(time);
+          }
         }
 
-        private updateDrone(drone: EnemySprite, time: number) {
+        private updateDrone(drone: EnemySprite, time: number, targetX: number, targetY: number) {
           const config = drone.kind === "elite-drone" ? RAID_ELITE_DRONE : RAID_DRONE;
           const distance = PhaserLib.Math.Distance.Between(
             drone.x,
             drone.y,
-            this.player.x,
-            this.player.y,
+            targetX,
+            targetY,
           );
           const toPlayer = new PhaserLib.Math.Vector2(
-            this.player.x - drone.x,
-            this.player.y - drone.y,
+            targetX - drone.x,
+            targetY - drone.y,
           );
 
           if (distance < config.retreatDistance && toPlayer.lengthSq() > 0) {
@@ -1320,23 +2150,24 @@ export function PhaserRaidGame({
           drone.rotation += drone.kind === "elite-drone" ? 0.034 : 0.024;
 
           if (time - drone.lastShotAt >= config.fireRateMs) {
-            this.fireDroneShot(drone);
+            this.fireDroneShot(drone, targetX, targetY);
             drone.lastShotAt = time;
           }
         }
 
-        private fireDroneShot(drone: EnemySprite) {
+        private fireDroneShot(drone: EnemySprite, targetX: number, targetY: number) {
           const isElite = drone.kind === "elite-drone";
           const angle = PhaserLib.Math.Angle.Between(
             drone.x,
             drone.y,
-            this.player.x,
-            this.player.y,
+            targetX,
+            targetY,
           );
 
           this.spawnBullet({
             angle,
-            damage: isElite ? RAID_ELITE_DRONE.damage : RAID_ENEMY_BULLET.damage,
+            damage: isElite ? RAID_ELITE_DRONE.damage : RAID_DRONE.damage,
+            damageSource: isElite ? "elite_drone_projectile" : "drone_projectile",
             owner: "enemy",
             pierceRemaining: 0,
             projectileRadius: RAID_ENEMY_BULLET.radius,
@@ -1349,6 +2180,45 @@ export function PhaserRaidGame({
           });
         }
 
+        private updateRemotePlayerContactDamage(time: number) {
+          this.remotePlayers.forEach((player) => {
+            if (
+              player.hp <= 0 ||
+              player.roomNumber !== this.getCurrentRoom().number ||
+              time - player.lastSeenAt > 2500
+            ) {
+              return;
+            }
+
+            this.enemies.getChildren().forEach((enemyObject: GameObject) => {
+              const enemy = enemyObject as EnemySprite;
+
+              if (enemy.kind !== "crawler") {
+                return;
+              }
+
+              const distance = PhaserLib.Math.Distance.Between(
+                enemy.x,
+                enemy.y,
+                player.x,
+                player.y,
+              );
+
+              if (
+                distance <= RAID_CRAWLER.radius + RAID_PLAYER.radius &&
+                time - player.lastContactDamageAt >= RAID_CRAWLER.contactCooldownMs
+              ) {
+                player.lastContactDamageAt = time;
+                this.applyRemotePlayerDamage(
+                  player.playerId,
+                  RAID_CRAWLER.damage,
+                  "crawler_contact",
+                );
+              }
+            });
+          });
+        }
+
         private updatePlayerBullets(time: number) {
           this.playerBullets.getChildren().forEach((bulletObject: GameObject) => {
             this.destroyExpiredBullet(bulletObject as BulletSprite, time, RAID_BULLET.lifetimeMs);
@@ -1357,11 +2227,55 @@ export function PhaserRaidGame({
 
         private updateEnemyBullets(time: number) {
           this.enemyBullets.getChildren().forEach((bulletObject: GameObject) => {
-            this.destroyExpiredBullet(
-              bulletObject as BulletSprite,
-              time,
-              RAID_ENEMY_BULLET.lifetimeMs,
-            );
+            const bullet = bulletObject as BulletSprite;
+
+            if (!bullet.active) {
+              return;
+            }
+
+            if (this.isHostClient()) {
+              let hitRemote = false;
+
+              this.remotePlayers.forEach((player) => {
+                if (
+                  hitRemote ||
+                  player.hp <= 0 ||
+                  player.roomNumber !== this.getCurrentRoom().number ||
+                  time - player.lastSeenAt > 2500
+                ) {
+                  return;
+                }
+
+                const distance = PhaserLib.Math.Distance.Between(
+                  bullet.x,
+                  bullet.y,
+                  player.x,
+                  player.y,
+                );
+
+                if (distance <= RAID_PLAYER.radius + RAID_ENEMY_BULLET.radius) {
+                  hitRemote = true;
+                  bullet.destroy();
+                  this.applyRemotePlayerDamage(
+                    player.playerId,
+                    bullet.damage,
+                    bullet.damageSource === "elite_drone_projectile"
+                      ? "elite_drone_projectile"
+                      : bullet.damageSource === "drone_projectile"
+                        ? "drone_projectile"
+                        : bullet.damageSource === "boss_projectile"
+                          ? "boss_projectile"
+                          : "enemy_projectile",
+                  );
+                }
+              });
+
+              if (hitRemote) {
+                return;
+              }
+            }
+
+            this.destroyExpiredBullet(bullet, time, RAID_ENEMY_BULLET.lifetimeMs);
           });
         }
 
@@ -1469,7 +2383,16 @@ export function PhaserRaidGame({
           }
 
           bullet.destroy();
-          this.damagePlayer(bullet.damage);
+          this.applyPlayerDamage(
+            bullet.damage,
+            bullet.damageSource === "elite_drone_projectile"
+              ? "elite_drone_projectile"
+              : bullet.damageSource === "drone_projectile"
+                ? "drone_projectile"
+                : bullet.damageSource === "boss_projectile"
+                  ? "boss_projectile"
+                  : "enemy_projectile",
+          );
         }
 
         private handlePlayerEnemyOverlap(
@@ -1489,17 +2412,26 @@ export function PhaserRaidGame({
           }
 
           this.lastContactDamageAt = time;
-          this.damagePlayer(RAID_CRAWLER.damage);
+          this.applyPlayerDamage(RAID_CRAWLER.damage, "crawler_contact");
         }
 
-        private damagePlayer(damage: number) {
-          if (this.raidStatus !== "running" && this.raidStatus !== "boss") {
+        private applyPlayerDamage(
+          rawDamage: number | undefined,
+          source: PlayerDamageSource,
+        ) {
+          if (!this.isRaidLive()) {
             return;
           }
 
-          const actualDamage = Math.min(this.hp, damage);
+          // Undefined projectile damage must never turn HP into NaN.
+          const damage = this.getSafeIncomingDamage(rawDamage, source);
+          const currentHp = Number.isFinite(this.hp)
+            ? this.getClampedHp(this.hp, 0)
+            : this.getSafeMaxHp();
+          const actualDamage = Math.min(currentHp, damage);
+
           this.damageTaken += actualDamage;
-          this.hp = Math.max(0, this.hp - actualDamage);
+          this.hp = Math.max(0, currentHp - actualDamage);
           this.cameras.main.flash(90, 255, 82, 48, false);
           this.cameras.main.shake(85, 0.003);
           this.player.setFillStyle(0xff8f6b, 1);
@@ -1525,7 +2457,7 @@ export function PhaserRaidGame({
           }
 
           const room = this.getCurrentRoom();
-          this.player.body.setVelocity(0, 0);
+          this.ensurePlayerBody()?.setVelocity(0, 0);
           this.clearProjectiles();
           this.roomsCleared = Math.max(this.roomsCleared, room.number);
 
@@ -1792,7 +2724,7 @@ export function PhaserRaidGame({
               Math.round((this.time.now - this.bossFightStartedAt) / 1000),
             ),
             kills: this.kills,
-            playerHp: this.hp,
+            playerHp: this.getClampedHp(this.hp, 0),
           };
         }
 
@@ -1925,11 +2857,17 @@ export function PhaserRaidGame({
             return;
           }
 
+          const target = this.getClosestCombatTarget(this.boss.x, this.boss.y);
+
+          if (!target) {
+            return;
+          }
+
           const baseAngle = PhaserLib.Math.Angle.Between(
             this.boss.x,
             this.boss.y,
-            this.player.x,
-            this.player.y,
+            target.x,
+            target.y,
           );
           const spread =
             count === 1
@@ -1945,6 +2883,7 @@ export function PhaserRaidGame({
             this.spawnBullet({
               angle,
               damage: RAID_BOSS.aimedShotDamage,
+              damageSource: "boss_projectile",
               owner: "boss",
               pierceRemaining: 0,
               projectileRadius: RAID_ENEMY_BULLET.radius,
@@ -1971,6 +2910,7 @@ export function PhaserRaidGame({
             this.spawnBullet({
               angle,
               damage: RAID_BOSS.radialShotDamage,
+              damageSource: "boss_projectile",
               owner: "boss",
               pierceRemaining: 0,
               projectileRadius: RAID_ENEMY_BULLET.radius,
@@ -2033,6 +2973,7 @@ export function PhaserRaidGame({
             (time - this.activeShockwave.startedAt) / this.activeShockwave.durationMs,
           );
           const radius = RAID_BOSS.radius + progress * this.activeShockwave.maxRadius;
+          const shockwaveDurationMs = this.activeShockwave.durationMs;
 
           this.activeShockwave.ring.clear();
           this.activeShockwave.ring.lineStyle(7, 0xffb347, 0.82 - progress * 0.42);
@@ -2066,7 +3007,39 @@ export function PhaserRaidGame({
             playerDistance >= radius - 38
           ) {
             this.activeShockwave.damagedPlayer = true;
-            this.damagePlayer(RAID_BOSS.shockwaveDamage);
+            this.applyPlayerDamage(RAID_BOSS.shockwaveDamage, "boss_shockwave");
+          }
+
+          if (this.isHostClient()) {
+            this.remotePlayers.forEach((player) => {
+              if (
+                player.hp <= 0 ||
+                player.roomNumber !== this.getCurrentRoom().number ||
+                time - player.lastSeenAt > 2500
+              ) {
+                return;
+              }
+
+              const distance = PhaserLib.Math.Distance.Between(
+                this.boss!.x,
+                this.boss!.y,
+                player.x,
+                player.y,
+              );
+
+              if (
+                distance <= radius &&
+                distance >= radius - 38 &&
+                time - player.lastContactDamageAt >= shockwaveDurationMs
+              ) {
+                player.lastContactDamageAt = time;
+                this.applyRemotePlayerDamage(
+                  player.playerId,
+                  RAID_BOSS.shockwaveDamage,
+                  "boss_shockwave",
+                );
+              }
+            });
           }
 
           if (progress >= 1) {
@@ -2092,7 +3065,38 @@ export function PhaserRaidGame({
             time - this.lastBossContactDamageAt >= RAID_BOSS.contactCooldownMs
           ) {
             this.lastBossContactDamageAt = time;
-            this.damagePlayer(RAID_BOSS.contactDamage);
+            this.applyPlayerDamage(RAID_BOSS.contactDamage, "boss_contact");
+          }
+
+          if (this.isHostClient()) {
+            this.remotePlayers.forEach((player) => {
+              if (
+                player.hp <= 0 ||
+                player.roomNumber !== this.getCurrentRoom().number ||
+                time - player.lastSeenAt > 2500
+              ) {
+                return;
+              }
+
+              const remoteDistance = PhaserLib.Math.Distance.Between(
+                this.boss!.x,
+                this.boss!.y,
+                player.x,
+                player.y,
+              );
+
+              if (
+                remoteDistance <= RAID_BOSS.radius + RAID_PLAYER.radius &&
+                time - player.lastContactDamageAt >= RAID_BOSS.contactCooldownMs
+              ) {
+                player.lastContactDamageAt = time;
+                this.applyRemotePlayerDamage(
+                  player.playerId,
+                  RAID_BOSS.contactDamage,
+                  "boss_contact",
+                );
+              }
+            });
           }
         }
 
@@ -2157,9 +3161,15 @@ export function PhaserRaidGame({
         }
 
         private endRaid() {
+          if (this.raidStatus === "operator-down" || this.raidStatus === "victory") {
+            return;
+          }
+
           this.raidStatus = "operator-down";
           this.statusText = "Operator down. Raid failed.";
-          this.player.body.setVelocity(0, 0);
+          this.hp = 0;
+          this.dashUntil = 0;
+          this.ensurePlayerBody()?.setVelocity(0, 0);
           this.player.setFillStyle(0x3b0b0b, 1);
           this.player.setStrokeStyle(3, 0xff5a1f, 0.95);
           this.bossAura?.clear();
@@ -2325,6 +3335,15 @@ export function PhaserRaidGame({
             enemy.shadow.setPosition(enemy.x, enemy.y + 14);
           });
 
+          this.remotePlayers.forEach((player) => {
+            if (!player.active) {
+              return;
+            }
+
+            player.shadow?.setPosition(player.x, player.y + 15);
+            player.nicknameLabel?.setPosition(player.x, player.y - 26);
+          });
+
           if (this.boss?.active && this.boss.shadow) {
             this.boss.shadow.setPosition(this.boss.x, this.boss.y + 22);
           }
@@ -2413,15 +3432,32 @@ export function PhaserRaidGame({
             return;
           }
 
+          this.sanitizeLocalVitals();
           this.lastHudAt = time;
           const room = this.getCurrentRoom();
+          const snapshotBoss = this.latestHostSnapshot?.boss;
+          const safeMaxHp = this.getSafeMaxHp();
+          const safeHp = this.getClampedHp(this.hp, 0);
+          const bossHpRaw = this.isGuestClient()
+            ? (snapshotBoss?.hp ?? 0)
+            : (this.boss?.hp ?? 0);
+          const bossHp = Number.isFinite(bossHpRaw) ? Math.max(0, bossHpRaw) : 0;
+          const bossPhase = this.isGuestClient()
+            ? (snapshotBoss?.phase ?? null)
+            : this.bossPhase;
+          const bossMode = this.isGuestClient()
+            ? (snapshotBoss?.mode ?? null)
+            : this.bossMode;
+          const enemiesAlive = this.isGuestClient()
+            ? (this.latestHostSnapshot?.enemiesAlive ?? 0)
+            : (this.enemies?.countActive(true) ?? 0);
 
           onHudChange({
-            bossHp: this.boss?.hp ?? 0,
+            bossHp,
             bossMaxHp: RAID_BOSS.maxHp,
-            bossMode: this.bossMode,
+            bossMode,
             bossModeHistory: this.bossModeHistory,
-            bossPhase: this.bossPhase,
+            bossPhase,
             currentWeaponId: this.currentWeapon.id,
             currentWeaponName: this.currentWeapon.name,
             damageTaken: this.damageTaken,
@@ -2430,10 +3466,10 @@ export function PhaserRaidGame({
               this.getDashCooldownMs() - (time - this.lastDashAt),
             ),
             dashReady: time - this.lastDashAt >= this.getDashCooldownMs(),
-            enemiesAlive: this.enemies?.countActive(true) ?? 0,
-            hp: this.hp,
+            enemiesAlive,
+            hp: safeHp,
             kills: this.kills,
-            maxHp: this.maxHp,
+            maxHp: safeMaxHp,
             roomName: room.name,
             roomNumber: room.number,
             roomsCleared: this.roomsCleared,
@@ -2480,6 +3516,7 @@ export function PhaserRaidGame({
       gameRef.current = null;
     };
   }, [
+    multiplayer,
     onAiEventRequest,
     onBossPhaseRequest,
     onHudChange,
@@ -2488,4 +3525,14 @@ export function PhaserRaidGame({
   ]);
 
   return <div className="aspect-[960/620] w-full overflow-hidden" ref={mountRef} />;
+}
+
+function rotatePoint(x: number, y: number, angle: number) {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  return {
+    x: x * cos - y * sin,
+    y: x * sin + y * cos,
+  };
 }

@@ -82,9 +82,9 @@ export default function Home() {
             </Link>
             <Link
               className="inline-flex items-center gap-2 border border-cyan-300/40 bg-cyan-300 px-4 py-2 text-sm font-bold uppercase tracking-[0.14em] text-[#031014] transition hover:bg-cyan-200"
-              href="/play"
+              href="/room"
             >
-              Start Raid
+              Co-op Rooms
               <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
@@ -115,13 +115,25 @@ export default function Home() {
               examiners within seconds.
             </p>
 
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
                 className="inline-flex items-center justify-center gap-2 border border-cyan-300 bg-cyan-300 px-6 py-3 text-sm font-black uppercase tracking-[0.16em] text-[#031014] transition hover:bg-cyan-200"
                 href="/play"
               >
-                Start Raid
+                Start Solo Raid
                 <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link
+                className="inline-flex items-center justify-center gap-2 border border-orange-300 bg-orange-300 px-6 py-3 text-sm font-black uppercase tracking-[0.16em] text-[#160704] transition hover:bg-orange-200"
+                href="/room"
+              >
+                Create Co-op Room
+              </Link>
+              <Link
+                className="inline-flex items-center justify-center gap-2 border border-cyan-300/35 px-6 py-3 text-sm font-bold uppercase tracking-[0.16em] text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-300/10"
+                href="/room"
+              >
+                Join Room
               </Link>
               <a
                 className="inline-flex items-center justify-center gap-2 border border-cyan-300/35 px-6 py-3 text-sm font-bold uppercase tracking-[0.16em] text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-300/10"
