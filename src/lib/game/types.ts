@@ -1,6 +1,17 @@
 export type GameStatus = "active" | "grid-restored" | "blackout";
 
-export type CellVisibility = "hidden" | "revealed" | "flagged";
+export type CellVisibility = "hidden" | "revealed" | "flagged" | "contained";
+
+export type RevealOutcome =
+  | "ignored"
+  | "safe-revealed"
+  | "shield-absorbed"
+  | "grid-restored"
+  | "blackout";
+
+export type ScanRisk = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export type ShieldStatus = "available" | "armed" | "consumed";
 
 export type Coordinate = {
   row: number;
@@ -31,4 +42,10 @@ export type GameState = {
   safeCellCount: number;
   seed: number;
   detonatedCell: Coordinate | null;
+};
+
+export type RevealResult = {
+  state: GameState;
+  outcome: RevealOutcome;
+  coordinate: Coordinate | null;
 };

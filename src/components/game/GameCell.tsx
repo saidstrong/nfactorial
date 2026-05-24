@@ -28,8 +28,13 @@ export function GameCell({
 }: GameCellProps) {
   const isDetonated =
     detonatedCell?.row === cell.row && detonatedCell.column === cell.column;
-  const revealCorruption = status === "blackout" && cell.isCorrupted;
-  const isRevealed = cell.visibility === "revealed" || revealCorruption;
+  const isContained = cell.visibility === "contained";
+  const revealCorruption =
+    status === "blackout" &&
+    cell.isCorrupted &&
+    cell.visibility !== "flagged" &&
+    !isContained;
+  const isRevealed = cell.visibility === "revealed" || revealCorruption || isContained;
   const isFlagged = cell.visibility === "flagged" && !revealCorruption;
   const coordinate = { row: cell.row, column: cell.column };
 
@@ -67,6 +72,10 @@ function getCellContent(
     return "Q";
   }
 
+  if (cell.visibility === "contained") {
+    return "C";
+  }
+
   if (revealCorruption || (cell.visibility === "revealed" && cell.isCorrupted)) {
     return "X";
   }
@@ -87,6 +96,10 @@ function getCellTitle(
     return `Quarantined node row ${cell.row + 1}, column ${cell.column + 1}`;
   }
 
+  if (cell.visibility === "contained") {
+    return `Contained corrupted node row ${cell.row + 1}, column ${cell.column + 1}`;
+  }
+
   if (revealCorruption || (cell.visibility === "revealed" && cell.isCorrupted)) {
     return `Corrupted node row ${cell.row + 1}, column ${cell.column + 1}`;
   }
@@ -105,6 +118,13 @@ function getCellClasses(
   revealCorruption: boolean,
   isDetonated: boolean,
 ): string {
+  if (cell.visibility === "contained") {
+    return [
+      "border-cyan-300 bg-[#10222a] text-amber-200",
+      "shadow-[inset_0_0_18px_rgba(45,212,191,0.2),0_0_20px_rgba(251,191,36,0.16)]",
+    ].join(" ");
+  }
+
   if (revealCorruption || (cell.visibility === "revealed" && cell.isCorrupted)) {
     return [
       "border-red-400 bg-[#2a0808] text-red-100",

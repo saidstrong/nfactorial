@@ -1,4 +1,12 @@
-import type { Coordinate, GameBoard, GameCell, GameConfig, GameState } from "./types";
+import type {
+  Coordinate,
+  GameBoard,
+  GameCell,
+  GameConfig,
+  GameState,
+  RevealResult,
+  ScanRisk,
+} from "./types";
 
 export const DEFAULT_GAME_CONFIG: GameConfig = {
   rows: 10,
@@ -39,41 +47,65 @@ export function createGame(seed = 1, config = DEFAULT_GAME_CONFIG): GameState {
 export function revealCell(
   state: GameState,
   coordinate: Coordinate,
-): GameState {
+  options: { shieldActive?: boolean } = {},
+): RevealResult {
   if (state.status !== "active" || !isInsideBoard(state.board, coordinate)) {
-    return state;
+    return createRevealResult(state, "ignored", null);
   }
 
   const target = state.board[coordinate.row][coordinate.column];
 
   if (target.visibility !== "hidden") {
-    return state;
+    return createRevealResult(state, "ignored", null);
   }
 
   const board = cloneBoard(state.board);
   const nextTarget = board[coordinate.row][coordinate.column];
 
   if (nextTarget.isCorrupted) {
+    if (options.shieldActive) {
+      nextTarget.visibility = "contained";
+
+      return createRevealResult(
+        {
+          ...state,
+          board,
+          detonatedCell: coordinate,
+        },
+        "shield-absorbed",
+        coordinate,
+      );
+    }
+
     nextTarget.visibility = "revealed";
 
-    return {
-      ...state,
-      board,
-      status: "blackout",
-      detonatedCell: coordinate,
-    };
+    return createRevealResult(
+      {
+        ...state,
+        board,
+        status: "blackout",
+        detonatedCell: coordinate,
+      },
+      "blackout",
+      coordinate,
+    );
   }
 
   floodReveal(board, coordinate);
 
   const safeRevealed = countSafeRevealed(board);
+  const status = safeRevealed === state.safeCellCount ? "grid-restored" : "active";
 
-  return {
-    ...state,
-    board,
-    safeRevealed,
-    status: safeRevealed === state.safeCellCount ? "grid-restored" : "active",
-  };
+  return createRevealResult(
+    {
+      ...state,
+      board,
+      safeRevealed,
+      status,
+    },
+    status === "grid-restored" ? "grid-restored" : "safe-revealed",
+    coordinate,
+  );
 }
 
 export function toggleFlag(
@@ -86,7 +118,7 @@ export function toggleFlag(
 
   const target = state.board[coordinate.row][coordinate.column];
 
-  if (target.visibility === "revealed") {
+  if (target.visibility !== "hidden" && target.visibility !== "flagged") {
     return state;
   }
 
@@ -105,6 +137,43 @@ export function toggleFlag(
     board,
     flagsRemaining: state.flagsRemaining + (isFlagging ? -1 : 1),
   };
+}
+
+export function forceBlackout(state: GameState): GameState {
+  if (state.status !== "active") {
+    return state;
+  }
+
+  return {
+    ...state,
+    status: "blackout",
+  };
+}
+
+export function getScanRisk(state: GameState, coordinate: Coordinate): ScanRisk | null {
+  if (state.status !== "active" || !isInsideBoard(state.board, coordinate)) {
+    return null;
+  }
+
+  const cell = state.board[coordinate.row][coordinate.column];
+
+  if (cell.visibility !== "hidden") {
+    return null;
+  }
+
+  if (cell.isCorrupted) {
+    return "CRITICAL";
+  }
+
+  if (cell.adjacentCorruptions >= 3) {
+    return "HIGH";
+  }
+
+  if (cell.adjacentCorruptions >= 1) {
+    return "MEDIUM";
+  }
+
+  return "LOW";
 }
 
 function validateConfig(config: GameConfig): void {
@@ -254,6 +323,18 @@ function getNeighbors(board: GameBoard, coordinate: Coordinate): GameCell[] {
 function countSafeRevealed(board: GameBoard): number {
   return board.flat().filter((cell) => !cell.isCorrupted && cell.visibility === "revealed")
     .length;
+}
+
+function createRevealResult(
+  state: GameState,
+  outcome: RevealResult["outcome"],
+  coordinate: Coordinate | null,
+): RevealResult {
+  return {
+    state,
+    outcome,
+    coordinate,
+  };
 }
 
 function cloneBoard(board: GameBoard): GameBoard {

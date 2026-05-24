@@ -1,67 +1,98 @@
-# BLACKOUT GRID — Product Requirements
+# BLACKOUT RAID — Product Requirements
 
-## Must-have features
+## Must-have MVP
 
-### Landing
-- Hero title: BLACKOUT GRID
-- Subtitle explaining the crisis
-- Primary CTA: Start Mission
+### Pages
+- Landing page
+- Play page
+- End screen
+- Optional leaderboard page shell
+
+### Landing page
+- Title: BLACKOUT RAID
+- Subtitle: Survive the AI-directed dungeon.
+- CTA: Start Raid
 - Secondary CTA: How It Works
-- Optional CTA/link: Leaderboard
-- Three short feature cards:
-  - AI Tactical Counsel
-  - Stability-Based Crisis System
-  - Corrupted Grid Logic
+- Explanation of AI Director
 
 ### Game
-- 10x10 grid
-- 15 corrupted nodes
-- Reveal cell on click
-- Flag/quarantine cell
-- Auto-reveal empty connected areas
-- Show nearby corruption count
-- Win when all safe cells are revealed
-- Lose when:
-  - player clicks corrupted node without shield
-  - stability reaches 0
-- Timer
-- Stability meter
-- Flags remaining
+- Top-down arena shooter
+- WASD movement
+- Mouse aiming
+- Left-click shooting
+- Space dash
+- Player HP
+- Enemy HP
+- Bullet collisions
 - Score
-- Restart mission
+- Kills
+- Damage taken
+- 3 enemy waves
+- 1 final boss
+- Victory and defeat states
+- Restart
 
-### AI
-Use OpenAI API server-side only. Never expose API key to client.
+### Enemies
+- Crawler: melee, chases player
+- Shooter Drone: ranged, fires slow projectiles
 
-AI features:
-1. Mission briefing before/at mission start
-2. Tactical counsel during game
-3. Post-game debrief
+### Boss
+- The Blackout Core
+- Large HP bar
+- 3 phases
+- At least 4 attack patterns:
+  - aimed shot
+  - radial burst
+  - summon minions
+  - dash strike or charge
+- AI-directed phase/mode selection at phase changes
+- Fallback deterministic phase selection if AI fails
 
-All AI calls must have local fallback strings so the app remains playable if OpenAI fails.
+### Upgrades
+After each wave, show simple upgrade choices:
+- Overclocked Barrel: fire rate +20%
+- Reinforced Armor: max HP +25
+- Emergency Dash: dash cooldown -20%
+- Piercing Pulse: bullets pierce one enemy
+- Stabilizer Core: heal 20 HP
+- Critical Firmware: small chance for double damage
 
-### Supabase
-Use only for leaderboard:
-- Submit score
-- Display top scores
+MVP can show 3 random choices from this fixed list.
 
-No auth. No user accounts. No profiles.
+### AI features
+OpenAI is used server-side for:
+1. Mission briefing
+2. Room/event text
+3. Boss phase Director
+4. Final debrief
 
-### Demo readiness
-The game must be explainable in under 60 seconds:
-1. It is Minesweeper reimagined as a city power-grid crisis.
-2. Hidden corrupted nodes must be quarantined.
-3. Stability drops when you use AI or make mistakes.
-4. AI gives mission briefings, tactical counsel, and final debrief.
-5. Scores go to the leaderboard.
+All AI features must have local fallbacks.
+
+## Nice-to-have after MVP
+- Supabase room-code lobby
+- 2-player online co-op
+- Supabase Realtime host-authoritative sync
+- Leaderboard
+- Sound effects
+- Screen shake
+- Health pickups
+- Better particle effects
 
 ## Non-goals
 Do not build:
-- Auth
-- Multiplayer
-- Admin panel
-- Complex difficulty system
-- Payment
-- Complex animations before core gameplay
-- Real-time database subscriptions
-- Custom user profiles
+- inventory
+- many weapons
+- many maps
+- procedural dungeon generation
+- skins
+- account system
+- payment
+- chat
+- complex mobile controls
+- real-time LLM boss movement
+- full MMO-style networking
+
+## Hard rule
+A complete single-player AI boss game is better than broken multiplayer.
+
+Build order must preserve a playable game at every step.

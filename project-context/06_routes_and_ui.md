@@ -1,96 +1,120 @@
-# BLACKOUT GRID — Routes and UI Spec
+# BLACKOUT RAID — Routes and UI Spec
 
 ## Routes
 
 ### /
 Landing page.
-- Hero
-- Start Mission CTA
-- How It Works
-- Feature cards
-- Leaderboard preview or link
+
+Must include:
+- BLACKOUT RAID title
+- one-line explanation
+- Start Raid CTA
+- How it Works section
+- AI Director explanation
+- optional Join Room form later
 
 ### /play
-Main game.
-- Game board
-- Mission control panel
-- AI tools
-- Mission log
-- End panel/modal
+Single-player raid.
+
+Must include:
+- Phaser game canvas
+- HUD
+- mission briefing panel
+- upgrade selection overlay
+- boss phase warning overlay
+- end raid panel
 
 ### /leaderboard
-Leaderboard.
-- Top scores
-- Result
-- Score
-- Time
-- Rank
-- Stability
-- AI tools used
+Optional shell initially.
+Can say leaderboard coming soon if not implemented.
 
-## Landing page copy
+### /room/[code]
+Optional multiplayer route.
+Should be added only after local game is complete.
+
+## Landing copy
 
 Title:
-BLACKOUT GRID
+BLACKOUT RAID
 
 Subtitle:
-Restore the city grid before the blackout spreads.
+Survive the AI-directed dungeon.
 
 Description:
-A rogue signal has corrupted hidden nodes inside the city power network. Reveal safe nodes, quarantine threats, and use AI counsel carefully — every decision costs stability.
+Enter a corrupted digital arena, clear hostile bots, collect upgrades, and fight the Blackout Core — a hard final boss whose phases are selected by an AI Director based on your performance.
 
-CTA:
-Start Mission
+Feature cards:
+1. AI Mission Director
+2. Roguelite Upgrade Choices
+3. Adaptive Boss Fight
+4. Optional Online Co-op
 
-Secondary:
-View Leaderboard
+## HUD
 
-## How it works
-1. Reveal nodes to restore the grid.
-2. Numbers show nearby corrupted nodes.
-3. Quarantine suspected threats.
-4. Use AI tools carefully; they reduce stability.
-5. Restore all safe nodes before the city blacks out.
+Show:
+- HP bar
+- current wave
+- score
+- kills
+- dash cooldown
+- current upgrade/modifier
+- boss HP bar during boss fight
+- short mission log
 
-## Game UI layout
+## Upgrade overlay
 
-Desktop:
-```txt
-[Board: 10x10] [Mission Control Panel]
-```
+After each wave:
+- pause combat
+- show 3 upgrade cards
+- player selects one
+- apply effect
+- next wave begins
 
-Mobile:
-```txt
-[Mission Summary]
-[Board]
-[AI Tools / Log]
-```
+## AI event overlay
 
-## Mission control contents
-- Result/status
-- Timer
-- Stability meter
-- Flags remaining
-- Score
-- AI tools:
-  - AI Counsel
-  - Scan Node
-  - Shield Pulse
-- Mission briefing
-- Latest AI message / mission log
+Before Wave 3:
+- show event title
+- show event text
+- show modifier effect
 
-## Cell visual states
-- Hidden: dark tile with subtle border
-- Revealed safe: muted blue/gray
-- Numbered: stronger text
-- Flagged/quarantined: orange marker
-- Corrupted: red/orange danger
-- Shield-contained: blue/orange mixed state
+Example:
+"POWER SURGE — Hostile bots move 15% faster."
 
-## UX details
-- Board must be obvious and clickable.
-- Right click toggles flag on desktop.
-- Add a visible "Flag Mode" toggle for mobile.
-- Add visible "Scan Mode" state when scan is active.
-- Disable AI tool buttons after game over.
-- End screen must clearly show win/loss and score.
+## Boss phase overlay
+
+At 70% and 35% boss HP:
+- show phase title
+- show AI Director warning
+- show selected boss mode
+
+Example:
+"ADAPTIVE OVERLOAD — The Core detected aggressive movement. Summoner mode activated."
+
+## End screen
+
+Show:
+- Victory / Wipeout
+- score
+- kills
+- damage taken
+- rooms cleared
+- upgrades selected
+- boss modes faced
+- AI final debrief
+- Restart button
+
+## Visual style
+
+Use:
+- dark background
+- electric blue player/projectiles
+- orange/red enemies and danger
+- clean white/gray UI text
+- neon borders
+- subtle glow
+- cyber grid background
+
+Avoid:
+- childish/cartoon UI
+- cluttered dashboard
+- unreadable tiny text

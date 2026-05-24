@@ -1,53 +1,74 @@
-# BLACKOUT GRID — Master Overview
+# BLACKOUT RAID — Master Overview
 
 ## Product
-BLACKOUT GRID is a solo hackathon web game based on classic Minesweeper, reimagined as an AI-powered crisis-control simulator.
 
-The player is a city grid operator. A rogue signal has corrupted hidden nodes inside the power network. The player must reveal safe nodes, quarantine corrupted nodes, use limited AI assistance, and restore the city grid before stability collapses.
+BLACKOUT RAID is a browser-based AI-directed roguelite arena shooter inspired by classic arcade dungeon crawlers such as Gauntlet and Rogue-style survival games.
+
+The player enters a corrupted digital dungeon, clears enemy waves, collects upgrades, and fights a hard adaptive boss. The AI is used as a Dungeon/Boss Director: it generates mission briefings, crisis events, boss phase decisions, and final debriefs.
 
 ## One-line pitch
-An AI-powered crisis Minesweeper where you save a city power grid from hidden corrupted nodes before blackout spreads.
 
-## Hackathon goal
-Build a complete, polished, deployed browser game by the deadline.
+BLACKOUT RAID is an AI-directed cyber dungeon shooter where operators survive corrupted enemy waves and fight an adaptive boss whose phases are selected by an AI Director.
 
-## Core priorities
-1. Working gameplay.
-2. Clear user flow.
-3. Strong visual identity.
-4. Visible AI usage.
-5. Public deployment.
-6. GitHub pushed before deadline.
-7. 1-minute demo video.
+## Hackathon positioning
 
-## Design tone
-Serious, dark, premium, cyber-operations style.
+This is not a full Soul Knight clone. It is a polished vertical slice:
+- one cyber arena
+- one player class
+- one weapon
+- two enemy types
+- upgrade choices
+- one hard final boss
+- OpenAI-powered Director text and boss decisions
+- optional 2-player room-code co-op if time allows
 
-Avoid cartoon aesthetics. The game should feel like a command-center dashboard, not a casual clone.
+## Classic game foundation
 
-## Classic game base
-Minesweeper.
+Classic base:
+- Gauntlet-style arcade dungeon crawler
+- Rogue-lite wave survival
+- Top-down shooter
 
-## Reframing
-| Minesweeper | BLACKOUT GRID |
-|---|---|
-| Mine | Corrupted node |
-| Flag | Quarantine marker |
-| Number | Nearby corruption count |
-| Board | City power grid |
-| Game over | Blackout |
-| Win | Grid restored |
-| Hint | AI tactical counsel |
+Reimagined as:
+- cyber raid inside a corrupted system
+- AI Director controls mission events and boss adaptation
+- short run designed for fast demo
 
-## MVP scope
-The MVP must be small and complete:
-- Landing page
-- How-to-play modal/section
-- Game board
-- Mission control panel
-- AI briefing/counsel/debrief with fallbacks
-- Stability meter
-- Score system
-- End screen
-- Supabase leaderboard
-- Public Vercel deployment
+## Core fantasy
+
+The player is an Operator entering a corrupted city/grid system. Enemy bots defend the system. The final boss, the Blackout Core, adapts to the player's performance.
+
+## Design goals
+
+1. Make it playable quickly.
+2. Make combat feel responsive.
+3. Make the boss hard but fair.
+4. Make AI usage visible and meaningful.
+5. Make the demo exciting in under 1 minute.
+6. Avoid overbuilding.
+
+## Primary success criteria
+
+By the end:
+- deployed public web game
+- working combat loop
+- wave progression
+- final boss
+- AI mission briefing
+- AI event / boss director
+- AI final debrief
+- polished visual style
+- GitHub pushed
+- demo video recorded
+
+## Tone
+
+Serious, dark, cyber, energetic.
+
+Visual direction:
+- dark navy / black background
+- orange danger accents
+- electric blue player energy
+- neon projectile effects
+- clean HUD
+- command-center UI around arcade action
