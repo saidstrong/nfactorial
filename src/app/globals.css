@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --background: #05070a;
+  --foreground: #e6f7ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: var(--background);
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background:
+    linear-gradient(rgba(42, 252, 219, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42, 252, 219, 0.05) 1px, transparent 1px),
+    linear-gradient(135deg, rgba(42, 252, 219, 0.09), transparent 38%),
+    linear-gradient(315deg, rgba(255, 178, 71, 0.06), transparent 44%),
+    var(--background);
+  background-size:
+    36px 36px,
+    36px 36px,
+    auto,
+    auto,
+    auto;
+  color: var(--foreground);
+  font-family:
+    "Segoe UI",
+    "Inter",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+}
+
+button {
+  font: inherit;
+}
+
+.scanline {
+  position: relative;
+  overflow: hidden;
+}
+
+.scanline::after {
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(42, 252, 219, 0.08),
+    transparent
+  );
+  content: "";
+  inset: -100% 0 auto;
+  height: 100%;
+  pointer-events: none;
+  position: absolute;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .scanline::after {
+    animation: scanline 7s linear infinite;
+  }
+}
+
+@keyframes scanline {
+  from {
+    transform: translateY(-20%);
+  }
+
+  to {
+    transform: translateY(220%);
+  }
+}
