@@ -3,14 +3,14 @@ export const RAID_GAME_HEIGHT = 620;
 export const RAID_ARENA_PADDING = 28;
 
 export const RAID_PLAYER = {
-  maxHp: 100,
+  maxHp: 110,
   radius: 15,
   speed: 245,
   dashSpeed: 620,
   dashDurationMs: 145,
-  dashCooldownMs: 1500,
-  bulletDamage: 18,
-  fireRateMs: 260,
+  dashCooldownMs: 1425,
+  bulletDamage: 19,
+  fireRateMs: 250,
 };
 
 export const RAID_BULLET = {
@@ -21,47 +21,47 @@ export const RAID_BULLET = {
 
 export const RAID_ENEMY_BULLET = {
   radius: 6,
-  speed: 235,
-  damage: 12,
+  speed: 220,
+  damage: 10,
   lifetimeMs: 1650,
 };
 
 export const RAID_CRAWLER = {
   radius: 14,
   hp: 36,
-  speed: 105,
-  damage: 10,
-  contactCooldownMs: 650,
+  speed: 98,
+  damage: 9,
+  contactCooldownMs: 700,
   scoreValue: 120,
 };
 
 export const RAID_DRONE = {
   radius: 16,
   hp: 54,
-  speed: 82,
+  speed: 76,
   damage: RAID_ENEMY_BULLET.damage,
   preferredDistance: 240,
   retreatDistance: 160,
-  fireRateMs: 1450,
+  fireRateMs: 1550,
   scoreValue: 190,
 };
 
 export const RAID_BOSS = {
   name: "The Blackout Core",
   radius: 46,
-  maxHp: 1500,
-  contactDamage: 18,
-  contactCooldownMs: 900,
-  aimedShotDamage: 14,
-  radialShotDamage: 12,
-  shockwaveDamage: 18,
-  aimedShotSpeed: 255,
-  radialShotSpeed: 215,
-  phaseOneAttackMs: 1050,
-  phaseTwoAttackMs: 820,
-  phaseThreeAttackMs: 610,
-  summonCooldownMs: 5200,
-  shockwaveCooldownMs: 7000,
+  maxHp: 1425,
+  contactDamage: 16,
+  contactCooldownMs: 980,
+  aimedShotDamage: 12,
+  radialShotDamage: 10,
+  shockwaveDamage: 16,
+  aimedShotSpeed: 238,
+  radialShotSpeed: 205,
+  phaseOneAttackMs: 1140,
+  phaseTwoAttackMs: 910,
+  phaseThreeAttackMs: 690,
+  summonCooldownMs: 5600,
+  shockwaveCooldownMs: 7600,
 };
 
 export const RAID_WAVES = [

@@ -1,6 +1,22 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  Bot,
+  BrainCircuit,
+  Crown,
+  Crosshair,
+  Radar,
+  RotateCcw,
+  Shield,
+  ShieldAlert,
+  Sparkles,
+  Target,
+  TimerReset,
+  Zap,
+} from "lucide-react";
 import {
   AI_BOSS_PHASE_FALLBACK,
   AI_DEBRIEF_FALLBACK,
@@ -26,10 +42,31 @@ import { INITIAL_RAID_HUD } from "@/lib/game/constants";
 import type { RaidHudState, UpgradeOption, UpgradeSelection } from "@/lib/game/types";
 import { PhaserRaidGame } from "./PhaserRaidGame";
 
+type FeedTone = "neutral" | "alert" | "critical";
+
+type DirectorFeedEntry = {
+  id: string;
+  title: string;
+  body: string;
+  tone: FeedTone;
+};
+
+const INITIAL_FEED: DirectorFeedEntry[] = [
+  {
+    id: "boot-sequence",
+    title: "AI Director online",
+    body: "Mission uplink established. Awaiting live battlefield data.",
+    tone: "neutral",
+  },
+];
+
 export function RaidShell() {
   const [hud, setHud] = useState<RaidHudState>(INITIAL_RAID_HUD);
   const [restartKey, setRestartKey] = useState(0);
   const [mission, setMission] = useState<MissionBriefing>(AI_MISSION_FALLBACK);
+  const [missionLoading, setMissionLoading] = useState(true);
+  const [directorFeed, setDirectorFeed] =
+    useState<DirectorFeedEntry[]>(INITIAL_FEED);
   const [upgradeOffers, setUpgradeOffers] = useState<UpgradeOption[] | null>(null);
   const [upgradeSelection, setUpgradeSelection] =
     useState<UpgradeSelection | null>(null);
@@ -45,6 +82,16 @@ export function RaidShell() {
     useState<BossPhaseSelection | null>(null);
   const [debrief, setDebrief] = useState<string | null>(null);
   const bossPhaseSequenceRef = useRef(0);
+  const feedKeysRef = useRef<Set<string>>(new Set(INITIAL_FEED.map((entry) => entry.id)));
+
+  const pushFeed = useCallback((entry: DirectorFeedEntry) => {
+    if (feedKeysRef.current.has(entry.id)) {
+      return;
+    }
+
+    feedKeysRef.current.add(entry.id);
+    setDirectorFeed((currentFeed) => [entry, ...currentFeed].slice(0, 6));
+  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -57,9 +104,18 @@ export function RaidShell() {
         validateMissionOutput,
       );
 
-      if (!isCancelled) {
-        setMission(nextMission);
+      if (isCancelled) {
+        return;
       }
+
+      setMission(nextMission);
+      setMissionLoading(false);
+      pushFeed({
+        id: `mission-${restartKey}`,
+        title: nextMission.missionTitle,
+        body: nextMission.threatLine,
+        tone: "alert",
+      });
     }
 
     void loadMission();
@@ -67,11 +123,14 @@ export function RaidShell() {
     return () => {
       isCancelled = true;
     };
-  }, [restartKey]);
+  }, [pushFeed, restartKey]);
 
   function handleRestart() {
+    feedKeysRef.current = new Set(INITIAL_FEED.map((entry) => entry.id));
     setHud(INITIAL_RAID_HUD);
     setMission(AI_MISSION_FALLBACK);
+    setMissionLoading(true);
+    setDirectorFeed(INITIAL_FEED);
     setDebrief(null);
     setAiEventNotice(null);
     setAiEventSelection(null);
@@ -87,6 +146,12 @@ export function RaidShell() {
   function handleSelectUpgrade(upgrade: UpgradeOption) {
     const nextSequence = upgradeSequence + 1;
 
+    pushFeed({
+      id: `upgrade-${restartKey}-${nextSequence}`,
+      title: `Upgrade installed: ${upgrade.name}`,
+      body: upgrade.description,
+      tone: "neutral",
+    });
     setUpgradeSequence(nextSequence);
     setUpgradeSelection({
       id: upgrade.id,
@@ -95,24 +160,39 @@ export function RaidShell() {
     setUpgradeOffers(null);
   }
 
-  const handleAiEventRequest = useCallback((request: AiEventRequest) => {
-    setAiEventNotice({
-      directive: AI_EVENT_FALLBACK,
-      isLoading: true,
-    });
-
-    void requestAiDirector<AiEventDirective>(
-      "/api/ai/event",
-      request,
-      AI_EVENT_FALLBACK,
-      validateAiEventOutput,
-    ).then((directive) => {
-      setAiEventNotice({
-        directive,
-        isLoading: false,
+  const handleAiEventRequest = useCallback(
+    (request: AiEventRequest) => {
+      pushFeed({
+        id: `event-pending-${restartKey}-${request.wave}`,
+        title: "Wave 3 crisis scan",
+        body: "AI Director is evaluating breach conditions before the core chamber.",
+        tone: "neutral",
       });
-    });
-  }, []);
+      setAiEventNotice({
+        directive: AI_EVENT_FALLBACK,
+        isLoading: true,
+      });
+
+      void requestAiDirector<AiEventDirective>(
+        "/api/ai/event",
+        request,
+        AI_EVENT_FALLBACK,
+        validateAiEventOutput,
+      ).then((directive) => {
+        setAiEventNotice({
+          directive,
+          isLoading: false,
+        });
+        pushFeed({
+          id: `event-${restartKey}-${directive.modifier}`,
+          title: directive.eventTitle,
+          body: directive.eventText,
+          tone: "alert",
+        });
+      });
+    },
+    [pushFeed, restartKey],
+  );
 
   const handleConfirmAiEvent = useCallback(() => {
     if (!aiEventNotice || aiEventNotice.isLoading) {
@@ -143,56 +223,110 @@ export function RaidShell() {
           phase,
           sequence: bossPhaseSequenceRef.current,
         });
+        pushFeed({
+          id: `boss-phase-${restartKey}-${phase}-${directive.bossMode}`,
+          title: directive.phaseTitle,
+          body: directive.message,
+          tone: "critical",
+        });
       });
     },
-    [],
+    [pushFeed, restartKey],
   );
 
-  const handleRaidEnd = useCallback((report: RaidEndReport) => {
-    setDebrief("AI Director compiling final debrief...");
+  const handleRaidEnd = useCallback(
+    (report: RaidEndReport) => {
+      setDebrief("AI Director compiling final mission report...");
+      pushFeed({
+        id: `result-${restartKey}-${report.result}`,
+        title: report.result === "victory" ? "Core destroyed" : "Operator down",
+        body:
+          report.result === "victory"
+            ? "Combat channel stabilized. Generating final debrief."
+            : "Raid channel lost. Generating recovery report.",
+        tone: report.result === "victory" ? "alert" : "critical",
+      });
 
-    void requestAiDirector<DebriefDirective>(
-      "/api/ai/debrief",
-      report,
-      AI_DEBRIEF_FALLBACK,
-      validateDebriefOutput,
-    ).then((directive) => {
-      setDebrief(directive.debrief);
-    });
-  }, []);
+      void requestAiDirector<DebriefDirective>(
+        "/api/ai/debrief",
+        report,
+        AI_DEBRIEF_FALLBACK,
+        validateDebriefOutput,
+      ).then((directive) => {
+        setDebrief(directive.debrief);
+        pushFeed({
+          id: `debrief-${restartKey}-${report.result}`,
+          title: "Mission report ready",
+          body: directive.debrief,
+          tone: "neutral",
+        });
+      });
+    },
+    [pushFeed, restartKey],
+  );
 
   const hpPercent = Math.max(0, Math.round((hud.hp / hud.maxHp) * 100));
-  const isDefeated = hud.status === "operator-down";
-  const isVictory = hud.status === "victory";
-  const showBossHud = hud.status === "boss" || hud.status === "victory";
   const bossHpPercent =
     hud.bossMaxHp > 0 ? Math.max(0, Math.round((hud.bossHp / hud.bossMaxHp) * 100)) : 0;
   const dashLabel = hud.dashReady
     ? "Ready"
     : `${Math.ceil(hud.dashCooldownRemainingMs / 100) / 10}s`;
+  const isResultState = hud.status === "operator-down" || hud.status === "victory";
+  const showBossHud = hud.status === "boss" || hud.status === "victory";
 
   return (
     <main className="min-h-screen px-4 py-5 text-white sm:px-6 lg:px-8">
       <div className="mx-auto flex max-w-7xl flex-col gap-5">
-        <header className="flex flex-col justify-between gap-4 border-b border-cyan-300/20 pb-5 md:flex-row md:items-end">
-          <div>
-            <h1 className="text-4xl font-black tracking-[0.08em] text-white sm:text-5xl">
+        <header className="panel flex flex-col gap-5 px-5 py-5 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-3xl">
+            <Link
+              className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100/62 transition hover:text-cyan-100"
+              href="/"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Return to briefing
+            </Link>
+            <h1 className="font-display mt-4 text-4xl font-black uppercase tracking-[0.1em] text-white sm:text-5xl">
               BLACKOUT RAID
             </h1>
-            <p className="mt-2 text-sm font-semibold uppercase tracking-[0.18em] text-cyan-100/65">
-              Survive the AI-directed dungeon.
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-cyan-100/70 sm:text-base">
+              Browser-based cyber raid demo. Read the mission in seconds, clear
+              the breach waves, and fight the AI-directed Blackout Core.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-right sm:grid-cols-4">
-              <HudMetric label="Wave" value={`${hud.wave}/${hud.totalWaves}`} />
-              <HudMetric label="Score" value={hud.score} />
-              <HudMetric label="Kills" value={hud.kills} />
-            <HudMetric label="Status" value={getStatusLabel(hud.status)} />
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <HeaderMetric label="Wave" value={`${hud.wave}/${hud.totalWaves}`} />
+            <HeaderMetric label="Score" value={hud.score} />
+            <HeaderMetric label="Kills" value={hud.kills} />
+            <HeaderMetric label="Status" value={getStatusLabel(hud.status)} />
           </div>
         </header>
 
-        <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="relative overflow-hidden border border-cyan-300/20 bg-[#020609] shadow-[0_0_44px_rgba(45,212,191,0.12)]">
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="panel-strong cyber-frame relative overflow-hidden px-3 py-3 sm:px-4 sm:py-4">
+            <div className="absolute inset-x-4 top-4 z-10 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+              <div className="flex flex-wrap gap-2">
+                <CanvasChip icon={Radar} label={`Wave ${hud.wave}/${hud.totalWaves}`} />
+                <CanvasChip icon={Target} label={`${hud.enemiesAlive} hostiles`} />
+                <CanvasChip icon={Shield} label={`Dash ${dashLabel}`} />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {showBossHud ? (
+                  <CanvasChip
+                    icon={Crown}
+                    label={`${hud.bossPhase ? `Phase ${hud.bossPhase}` : "Core"} / ${formatBossMode(hud.bossMode)}`}
+                    tone="warm"
+                  />
+                ) : null}
+                <CanvasChip
+                  icon={BrainCircuit}
+                  label={getStatusLabel(hud.status)}
+                  tone={hud.status === "boss" ? "warm" : "cool"}
+                />
+              </div>
+            </div>
+
             <PhaserRaidGame
               key={restartKey}
               aiEventSelection={aiEventSelection}
@@ -204,6 +338,24 @@ export function RaidShell() {
               onUpgradeOffer={setUpgradeOffers}
               upgradeSelection={upgradeSelection}
             />
+
+            <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div className="panel max-w-xl px-4 py-3">
+                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/60">
+                  Live status
+                </p>
+                <p className="mt-2 text-sm leading-6 text-cyan-100/78">
+                  {hud.statusText}
+                </p>
+              </div>
+              <div className="panel flex flex-wrap gap-2 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-100/72">
+                <span>WASD move</span>
+                <span>Mouse aim</span>
+                <span>Left click fire</span>
+                <span>Space dash</span>
+              </div>
+            </div>
+
             {upgradeOffers ? (
               <UpgradeOverlay
                 onSelectUpgrade={handleSelectUpgrade}
@@ -211,6 +363,7 @@ export function RaidShell() {
                 wave={hud.wave}
               />
             ) : null}
+
             {aiEventNotice ? (
               <AiEventOverlay
                 directive={aiEventNotice.directive}
@@ -220,163 +373,233 @@ export function RaidShell() {
             ) : null}
           </div>
 
-          <aside className="scanline border border-cyan-300/20 bg-[#071015]/90 p-5 shadow-[0_0_40px_rgba(0,0,0,0.35)]">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200/60">
-                Operator HUD
-              </p>
-              <h2 className="mt-2 text-2xl font-black tracking-[0.08em] text-white">
-                RAID CONTROL
-              </h2>
-            </div>
+          <aside className="flex flex-col gap-4">
+            <section className="panel-strong scanline px-5 py-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200/58">
+                    Mission Control
+                  </p>
+                  <h2 className="font-display mt-2 text-2xl font-black uppercase tracking-[0.08em] text-white">
+                    Raid Telemetry
+                  </h2>
+                </div>
+                <div className="status-chip text-cyan-100/78">
+                  {missionLoading ? "Syncing" : "Linked"}
+                </div>
+              </div>
 
-            <section className="mt-5 border border-cyan-300/15 bg-black/20 p-4">
-              <h3 className="text-xs font-black uppercase tracking-[0.18em] text-cyan-100">
-                AI Director Briefing
-              </h3>
-              <p className="mt-3 text-lg font-black uppercase tracking-[0.08em] text-white">
-                {mission.missionTitle}
-              </p>
-              <p className="mt-3 text-sm leading-6 text-cyan-100/70">
-                {mission.briefing}
-              </p>
-              <div className="mt-4 border-l border-orange-300/40 pl-3">
-                <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-orange-100/60">
-                  Target: {mission.bossName}
-                </p>
-                <p className="mt-2 text-sm leading-5 text-orange-100/75">
-                  {mission.threatLine}
-                </p>
+              <div className="mt-5 rounded-none border border-cyan-300/14 bg-black/18 p-4">
+                <div className="mb-3 flex items-end justify-between gap-4">
+                  <div>
+                    <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
+                      Operator HP
+                    </p>
+                    <p className="mt-1 text-4xl font-black text-white">
+                      {hud.hp}
+                      <span className="ml-2 text-lg text-cyan-100/55">/ {hud.maxHp}</span>
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
+                      Integrity
+                    </p>
+                    <p className="mt-1 text-lg font-black text-cyan-100">{hpPercent}%</p>
+                  </div>
+                </div>
+                <div className="h-4 overflow-hidden bg-[#0e1b25]">
+                  <div
+                    className="h-full bg-[linear-gradient(90deg,#ff7547,#58f3ff)] transition-all"
+                    style={{ width: `${hpPercent}%` }}
+                  />
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <MetricTile
+                    icon={Target}
+                    label="Hostiles"
+                    value={hud.enemiesAlive}
+                  />
+                  <MetricTile icon={Zap} label="Dash" value={dashLabel} />
+                  <MetricTile icon={Sparkles} label="Score" value={hud.score} />
+                  <MetricTile icon={Crosshair} label="Kills" value={hud.kills} />
+                </div>
               </div>
             </section>
 
-            <div className="mt-5 border border-cyan-300/15 bg-black/25 p-4">
-              <div className="mb-3 flex items-end justify-between">
+            <section className="panel px-5 py-5">
+              <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
-                    Operator HP
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200/58">
+                    AI Director Briefing
                   </p>
-                  <p className="mt-1 text-4xl font-black text-white">
-                    {hud.hp}/{hud.maxHp}
+                  <h3 className="font-display mt-2 text-xl font-black uppercase tracking-[0.08em] text-white">
+                    {mission.missionTitle}
+                  </h3>
+                </div>
+                <div className="status-chip border-orange-300/22 bg-orange-400/10 text-orange-100">
+                  <Bot className="h-4 w-4" />
+                  {missionLoading ? "Loading" : "Live"}
+                </div>
+              </div>
+              <p className="mt-4 text-sm leading-7 text-cyan-100/72">
+                {mission.briefing}
+              </p>
+              <div className="mt-4 grid gap-3">
+                <div className="metric-tile px-4 py-3">
+                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-orange-100/56">
+                    Blackout Core Target
+                  </p>
+                  <p className="mt-2 text-lg font-black text-white">{mission.bossName}</p>
+                </div>
+                <div className="metric-tile px-4 py-3">
+                  <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/56">
+                    Threat Line
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-cyan-100/74">
+                    {mission.threatLine}
                   </p>
                 </div>
-                <span className="text-xs font-black uppercase tracking-[0.18em] text-cyan-100/70">
-                  {hpPercent}%
-                </span>
               </div>
-              <div className="h-3 overflow-hidden bg-[#0f2027]">
-                <div
-                  className={[
-                    "h-full transition-all",
-                    hpPercent <= 30 ? "bg-red-400" : "bg-cyan-300",
-                  ].join(" ")}
-                  style={{ width: `${hpPercent}%` }}
-                />
-              </div>
-            </div>
+            </section>
 
             {showBossHud ? (
-              <section className="mt-5 border border-orange-300/25 bg-[#220b05]/40 p-4">
-                <div className="mb-3 flex items-end justify-between">
+              <section className="panel-warm px-5 py-5">
+                <div className="flex items-end justify-between gap-4">
                   <div>
-                    <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-orange-100/60">
-                      The Blackout Core
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-orange-100/58">
+                      Blackout Core
                     </p>
-                    <p className="mt-1 text-2xl font-black text-white">
-                      {hud.bossHp}/{hud.bossMaxHp}
-                    </p>
+                    <h3 className="font-display mt-2 text-2xl font-black uppercase tracking-[0.08em] text-white">
+                      Boss Channel
+                    </h3>
                   </div>
-                  <span className="text-xs font-black uppercase tracking-[0.18em] text-orange-100/75">
+                  <p className="text-sm font-black uppercase tracking-[0.16em] text-orange-100">
                     {bossHpPercent}%
-                  </span>
+                  </p>
                 </div>
-                <div className="h-3 overflow-hidden bg-[#2a1009]">
+
+                <div className="mt-4 h-4 overflow-hidden bg-[#2b120c]">
                   <div
-                    className="h-full bg-orange-400 transition-all"
+                    className="h-full bg-[linear-gradient(90deg,#ff9b45,#ff5b39)] transition-all"
                     style={{ width: `${bossHpPercent}%` }}
                   />
                 </div>
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  <HudMetric label="Phase" value={hud.bossPhase ?? "-"} />
-                  <HudMetric label="Mode" value={formatBossMode(hud.bossMode)} />
+
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <MetricTile
+                    icon={Crown}
+                    label="Boss HP"
+                    tone="warm"
+                    value={`${hud.bossHp}/${hud.bossMaxHp}`}
+                  />
+                  <MetricTile
+                    icon={Radar}
+                    label="Phase"
+                    tone="warm"
+                    value={hud.bossPhase ?? "-"}
+                  />
+                  <div className="col-span-2 metric-tile px-4 py-3">
+                    <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-orange-100/56">
+                      Current Mode
+                    </p>
+                    <p className="mt-2 text-lg font-black text-white">
+                      {formatBossMode(hud.bossMode)}
+                    </p>
+                  </div>
                 </div>
               </section>
             ) : null}
 
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <HudMetric label="Enemies" value={hud.enemiesAlive} />
-              <HudMetric label="Dash" value={dashLabel} />
-            </div>
+            <section className="panel px-5 py-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200/58">
+                    AI Director Feed
+                  </p>
+                  <h3 className="font-display mt-2 text-xl font-black uppercase tracking-[0.08em] text-white">
+                    Mission Updates
+                  </h3>
+                </div>
+                <div className="status-chip text-cyan-100/76">{directorFeed.length} logs</div>
+              </div>
 
-            <section className="mt-5 border border-cyan-300/15 bg-black/20 p-4">
-              <h3 className="text-xs font-black uppercase tracking-[0.18em] text-cyan-100">
-                Mission Status
-              </h3>
-              <p className="mt-3 text-sm leading-6 text-cyan-100/70">
-                {hud.statusText}
-              </p>
+              <div className="mt-4 grid gap-3">
+                {directorFeed.map((entry) => (
+                  <DirectorFeedCard entry={entry} key={entry.id} />
+                ))}
+              </div>
             </section>
 
-            <section className="mt-5 border border-cyan-300/15 bg-black/20 p-4">
-              <h3 className="text-xs font-black uppercase tracking-[0.18em] text-cyan-100">
-                Upgrades
-              </h3>
+            <section className="panel px-5 py-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200/58">
+                    Upgrade Bank
+                  </p>
+                  <h3 className="font-display mt-2 text-xl font-black uppercase tracking-[0.08em] text-white">
+                    Installed Modules
+                  </h3>
+                </div>
+                <div className="status-chip text-cyan-100/76">
+                  {hud.selectedUpgrades.length} selected
+                </div>
+              </div>
+
               {hud.selectedUpgrades.length > 0 ? (
-                <ul className="mt-3 grid gap-2 text-sm leading-5 text-cyan-100/70">
+                <div className="mt-4 grid gap-3">
                   {hud.selectedUpgrades.map((upgrade) => (
-                    <li className="border-l border-cyan-300/30 pl-3" key={upgrade.id}>
-                      <span className="font-bold text-cyan-100">{upgrade.name}</span>
-                      <span className="block text-cyan-100/55">
+                    <div className="metric-tile px-4 py-3" key={upgrade.id}>
+                      <p className="font-display text-sm font-black uppercase tracking-[0.08em] text-white">
+                        {upgrade.name}
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-cyan-100/70">
                         {upgrade.description}
-                      </span>
-                    </li>
+                      </p>
+                    </div>
                   ))}
-                </ul>
+                </div>
               ) : (
-                <p className="mt-3 text-sm leading-6 text-cyan-100/55">
-                  Clear Wave 1 to unlock the first upgrade choice.
+                <p className="mt-4 text-sm leading-7 text-cyan-100/66">
+                  Clear Wave 1 to unlock the first module choice. Clear Wave 2
+                  to shape the boss approach.
                 </p>
               )}
             </section>
 
-            <section className="mt-5 border border-cyan-300/15 bg-black/20 p-4">
-              <h3 className="text-xs font-black uppercase tracking-[0.18em] text-cyan-100">
+            <section className="panel px-5 py-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200/58">
                 Controls
-              </h3>
-              <ul className="mt-3 grid gap-2 text-sm leading-5 text-cyan-100/70">
-                <li>WASD: move</li>
-                <li>Mouse: aim</li>
-                <li>Left click: shoot</li>
-                <li>Space: dash</li>
-              </ul>
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <ControlRow icon={Radar} label="Move" value="WASD" />
+                <ControlRow icon={Crosshair} label="Aim" value="Mouse" />
+                <ControlRow icon={Target} label="Fire" value="Left click" />
+                <ControlRow icon={ShieldAlert} label="Dash" value="Space" />
+              </div>
             </section>
 
-            {isDefeated ? (
+            {isResultState ? (
               <ResultPanel
-                body="The raid collapsed before the Core was destroyed."
+                body={
+                  hud.status === "victory"
+                    ? "The Blackout Core is offline. The chamber is stable enough to extract."
+                    : "The operator fell before the core could be destroyed. The chamber remains compromised."
+                }
                 debrief={debrief}
-                heading="Operator Down"
+                heading={hud.status === "victory" ? "Core Destroyed" : "Operator Down"}
                 hud={hud}
-                label="Wipeout"
+                label={hud.status === "victory" ? "Victory" : "Wipeout"}
                 onRestart={handleRestart}
-                tone="danger"
-              />
-            ) : isVictory ? (
-              <ResultPanel
-                body="The Blackout Core is offline. Raid complete."
-                debrief={debrief}
-                heading="Core Destroyed"
-                hud={hud}
-                label="Victory"
-                onRestart={handleRestart}
-                tone="success"
+                tone={hud.status === "victory" ? "success" : "danger"}
               />
             ) : (
               <button
-                className="mt-5 w-full border border-cyan-300/55 px-4 py-3 text-sm font-bold uppercase tracking-[0.16em] text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-300/10"
+                className="inline-flex items-center justify-center gap-2 border border-cyan-300/42 bg-cyan-300 px-5 py-3 text-sm font-black uppercase tracking-[0.16em] text-[#031014] transition hover:bg-cyan-200"
                 onClick={handleRestart}
                 type="button"
               >
+                <RotateCcw className="h-4 w-4" />
                 Restart Raid
               </button>
             )}
@@ -396,31 +619,67 @@ function UpgradeOverlay({
   upgrades: UpgradeOption[];
   wave: number;
 }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  function handleSelect(upgrade: UpgradeOption) {
+    if (selectedId) {
+      return;
+    }
+
+    setSelectedId(upgrade.id);
+    window.setTimeout(() => onSelectUpgrade(upgrade), 160);
+  }
+
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#02060b]/88 p-4 backdrop-blur-sm">
-      <section className="w-full max-w-3xl border border-cyan-300/30 bg-[#071015]/95 p-5 shadow-[0_0_44px_rgba(45,212,191,0.2)]">
-        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200/60">
-          Wave {wave} Cleared
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#02060b]/86 p-4 backdrop-blur-sm">
+      <section className="panel-strong w-full max-w-4xl px-5 py-5 sm:px-6">
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200/62">
+          Wave {wave} cleared
         </p>
-        <h2 className="mt-2 text-3xl font-black uppercase tracking-[0.08em] text-white">
-          Choose Upgrade
+        <h2 className="font-display mt-2 text-3xl font-black uppercase tracking-[0.08em] text-white sm:text-4xl">
+          Choose One Upgrade
         </h2>
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
-          {upgrades.map((upgrade) => (
-            <button
-              className="min-h-40 border border-cyan-300/20 bg-[#081820] p-4 text-left transition hover:border-cyan-200 hover:bg-[#0d2430]"
-              key={upgrade.id}
-              onClick={() => onSelectUpgrade(upgrade)}
-              type="button"
-            >
-              <span className="block text-base font-black uppercase tracking-[0.1em] text-cyan-100">
-                {upgrade.name}
-              </span>
-              <span className="mt-3 block text-sm leading-6 text-cyan-100/65">
-                {upgrade.description}
-              </span>
-            </button>
-          ))}
+        <p className="mt-3 text-sm leading-7 text-cyan-100/68">
+          Install one combat module before the next breach. Selection applies
+          immediately.
+        </p>
+        <div className="mt-6 grid gap-3 md:grid-cols-3">
+          {upgrades.map((upgrade) => {
+            const isSelected = selectedId === upgrade.id;
+
+            return (
+              <button
+                className={[
+                  "group min-h-48 border px-5 py-5 text-left transition",
+                  isSelected
+                    ? "border-cyan-200 bg-cyan-300/12 shadow-[0_0_32px_rgba(88,243,255,0.18)]"
+                    : "border-cyan-300/18 bg-[#07131c] hover:border-cyan-200 hover:bg-[#0b1d29]",
+                ].join(" ")}
+                key={upgrade.id}
+                onClick={() => handleSelect(upgrade)}
+                type="button"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="status-chip text-cyan-100/74">
+                    Module
+                  </span>
+                  <span className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-100/42">
+                    {isSelected ? "Installed" : "Pick one"}
+                  </span>
+                </div>
+                <h3 className="font-display mt-6 text-xl font-black uppercase tracking-[0.08em] text-white">
+                  {upgrade.name}
+                </h3>
+                <p className="mt-4 text-sm leading-7 text-cyan-100/68">
+                  {upgrade.description}
+                </p>
+                <div className="mt-6 h-px bg-cyan-300/10" />
+                <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-100/55">
+                  {isSelected ? "Loading next wave" : "Install to continue"}
+                </p>
+              </button>
+            );
+          })}
         </div>
       </section>
     </div>
@@ -437,35 +696,47 @@ function AiEventOverlay({
   onConfirm: () => void;
 }) {
   return (
-    <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#02060b]/86 p-4 backdrop-blur-sm">
-      <section className="w-full max-w-2xl border border-orange-300/35 bg-[#120905]/95 p-5 shadow-[0_0_46px_rgba(255,90,31,0.22)]">
-        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-orange-100/60">
-          AI Director Crisis Event
-        </p>
-        <h2 className="mt-2 text-3xl font-black uppercase tracking-[0.08em] text-white">
-          {isLoading ? "Analyzing Wave 3" : directive.eventTitle}
-        </h2>
-        <p className="mt-4 text-sm leading-6 text-orange-100/76">
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#02060b]/82 p-4 backdrop-blur-sm">
+      <section className="panel-warm w-full max-w-2xl px-5 py-5 sm:px-6">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-orange-100/60">
+              AI Director Crisis Event
+            </p>
+            <h2 className="font-display mt-2 text-3xl font-black uppercase tracking-[0.08em] text-white">
+              {isLoading ? "Analyzing Wave 3" : directive.eventTitle}
+            </h2>
+          </div>
+          <div className="status-chip border-orange-300/25 bg-orange-400/10 text-orange-100">
+            <Bot className="h-4 w-4" />
+            {isLoading ? "Scanning" : "Directive"}
+          </div>
+        </div>
+
+        <p className="mt-4 text-sm leading-7 text-orange-100/78">
           {isLoading
-            ? "The Director is evaluating your raid state. A safe local fallback will engage if the uplink stalls."
+            ? "The AI Director is evaluating your run state. If the uplink stalls, a local failsafe event will deploy automatically."
             : directive.eventText}
         </p>
-        <div className="mt-5 border border-orange-300/20 bg-black/25 p-3">
-          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-orange-100/55">
-            Modifier
-          </p>
-          <p className="mt-2 text-lg font-black uppercase tracking-[0.08em] text-orange-100">
-            {isLoading ? "Pending" : formatModifier(directive.modifier)}
-          </p>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto]">
+          <div className="metric-tile px-4 py-3">
+            <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-orange-100/56">
+              Modifier
+            </p>
+            <p className="mt-2 text-lg font-black uppercase tracking-[0.08em] text-white">
+              {isLoading ? "Pending" : formatModifier(directive.modifier)}
+            </p>
+          </div>
+          <button
+            className="inline-flex items-center justify-center gap-2 border border-orange-300 bg-orange-300 px-5 py-3 text-sm font-black uppercase tracking-[0.16em] text-[#160704] transition hover:bg-orange-200 disabled:cursor-wait disabled:border-orange-300/28 disabled:bg-orange-300/20 disabled:text-orange-100/42"
+            disabled={isLoading}
+            onClick={onConfirm}
+            type="button"
+          >
+            Enter Wave 3
+          </button>
         </div>
-        <button
-          className="mt-5 w-full border border-orange-300 bg-orange-300 px-4 py-3 text-sm font-bold uppercase tracking-[0.16em] text-[#160704] transition hover:bg-orange-200 disabled:cursor-wait disabled:border-orange-300/30 disabled:bg-orange-300/20 disabled:text-orange-100/45"
-          disabled={isLoading}
-          onClick={onConfirm}
-          type="button"
-        >
-          Enter Wave 3
-        </button>
       </section>
     </div>
   );
@@ -488,67 +759,78 @@ function ResultPanel({
   onRestart: () => void;
   tone: "danger" | "success";
 }) {
-  const toneClass =
+  const themeClass =
     tone === "danger"
-      ? "border-red-300/45 bg-red-400/10 text-red-100/75"
-      : "border-emerald-300/45 bg-emerald-300/10 text-emerald-100/75";
+      ? "panel-warm"
+      : "panel-strong border-emerald-300/22 shadow-[0_24px_80px_rgba(0,0,0,0.45),0_0_40px_rgba(52,211,153,0.08)]";
 
   return (
-    <section className={["mt-5 border p-4", toneClass].join(" ")}>
-      <p className="text-xs font-semibold uppercase tracking-[0.2em]">{label}</p>
-      <h3 className="mt-2 text-2xl font-black uppercase tracking-[0.08em] text-white">
-        {heading}
-      </h3>
-      <p className="mt-3 text-sm leading-6 text-cyan-100/70">{body}</p>
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <HudMetric label="Score" value={hud.score} />
-        <HudMetric label="Kills" value={hud.kills} />
-        <HudMetric label="Damage Taken" value={hud.damageTaken} />
-        <HudMetric label="Modes Faced" value={hud.bossModeHistory.length || "-"} />
-      </div>
-      {hud.selectedUpgrades.length > 0 ? (
-        <div className="mt-4">
-          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
-            Upgrades Selected
+    <section className={`${themeClass} px-5 py-5`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100/58">
+            Mission Report
           </p>
-          <p className="mt-2 text-sm leading-6 text-cyan-100/70">
-            {hud.selectedUpgrades.map((upgrade) => upgrade.name).join(", ")}
+          <h3 className="font-display mt-2 text-3xl font-black uppercase tracking-[0.08em] text-white">
+            {label}
+          </h3>
+          <p className="mt-2 text-sm font-semibold uppercase tracking-[0.16em] text-cyan-100/55">
+            {heading}
           </p>
         </div>
-      ) : null}
-      {hud.bossModeHistory.length > 0 ? (
-        <div className="mt-4">
-          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
-            Boss Modes Faced
-          </p>
-          <p className="mt-2 text-sm leading-6 text-cyan-100/70">
-            {hud.bossModeHistory.map(formatBossMode).join(", ")}
-          </p>
+        <div className="status-chip border-cyan-300/18 bg-white/5 text-cyan-100/74">
+          Final
         </div>
-      ) : null}
-      <div className="mt-4 border border-cyan-300/15 bg-black/20 p-3">
-        <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
-          AI Debrief
-        </p>
-        <p className="mt-2 text-sm leading-6 text-cyan-100/70">
-          {debrief ?? "AI Director compiling final debrief..."}
-        </p>
       </div>
+
+      <p className="mt-4 text-sm leading-7 text-cyan-100/72">{body}</p>
+
+      <div className="mt-5 grid grid-cols-2 gap-3">
+        <MetricTile icon={Sparkles} label="Score" value={hud.score} />
+        <MetricTile icon={Crosshair} label="Kills" value={hud.kills} />
+        <MetricTile icon={ShieldAlert} label="Damage Taken" value={hud.damageTaken} />
+        <MetricTile icon={BrainCircuit} label="Modes Faced" value={hud.bossModeHistory.length || "-"} />
+      </div>
+
+      <div className="mt-5 grid gap-3">
+        <ReportBlock
+          body={
+            hud.selectedUpgrades.length > 0
+              ? hud.selectedUpgrades.map((upgrade) => upgrade.name).join(", ")
+              : "No upgrades selected."
+          }
+          title="Upgrades Selected"
+        />
+        <ReportBlock
+          body={
+            hud.bossModeHistory.length > 0
+              ? hud.bossModeHistory.map(formatBossMode).join(", ")
+              : "No boss modes recorded."
+          }
+          title="Boss Modes Faced"
+        />
+        <ReportBlock
+          body={debrief ?? "AI Director compiling final mission report..."}
+          title="AI Debrief"
+        />
+      </div>
+
       <button
-        className="mt-4 w-full border border-cyan-300 bg-cyan-300 px-4 py-3 text-sm font-bold uppercase tracking-[0.16em] text-[#021012] transition hover:bg-cyan-200"
+        className="mt-5 inline-flex w-full items-center justify-center gap-2 border border-cyan-300 bg-cyan-300 px-5 py-3 text-sm font-black uppercase tracking-[0.16em] text-[#031014] transition hover:bg-cyan-200"
         onClick={onRestart}
         type="button"
       >
+        <TimerReset className="h-4 w-4" />
         Restart Raid
       </button>
     </section>
   );
 }
 
-function HudMetric({ label, value }: { label: string; value: number | string }) {
+function HeaderMetric({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="border border-cyan-300/15 bg-[#081820] p-3">
-      <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
+    <div className="metric-tile px-4 py-3">
+      <p className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/54">
         {label}
       </p>
       <p className="mt-2 text-lg font-black text-white">{value}</p>
@@ -556,17 +838,132 @@ function HudMetric({ label, value }: { label: string; value: number | string }) 
   );
 }
 
+function MetricTile({
+  icon: Icon,
+  label,
+  tone = "cool",
+  value,
+}: {
+  icon: typeof Zap;
+  label: string;
+  tone?: "cool" | "warm";
+  value: number | string;
+}) {
+  return (
+    <div className="metric-tile px-4 py-3">
+      <div className="flex items-center gap-2">
+        <Icon className={tone === "warm" ? "h-4 w-4 text-orange-200" : "h-4 w-4 text-cyan-200"} />
+        <p className={tone === "warm"
+          ? "text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-orange-100/54"
+          : "text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/54"}>
+          {label}
+        </p>
+      </div>
+      <p className="mt-3 text-lg font-black text-white">{value}</p>
+    </div>
+  );
+}
+
+function CanvasChip({
+  icon: Icon,
+  label,
+  tone = "cool",
+}: {
+  icon: typeof Radar;
+  label: string;
+  tone?: "cool" | "warm";
+}) {
+  return (
+    <div
+      className={[
+        "inline-flex items-center gap-2 border px-3 py-2 text-[0.68rem] font-bold uppercase tracking-[0.16em]",
+        tone === "warm"
+          ? "border-orange-300/24 bg-[#26110b]/84 text-orange-100"
+          : "border-cyan-300/18 bg-[#09131d]/84 text-cyan-100",
+      ].join(" ")}
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </div>
+  );
+}
+
+function ControlRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Radar;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="metric-tile flex items-center justify-between gap-3 px-4 py-3">
+      <div className="flex items-center gap-3">
+        <div className="flex h-9 w-9 items-center justify-center border border-cyan-300/14 bg-cyan-300/8">
+          <Icon className="h-4 w-4 text-cyan-200" />
+        </div>
+        <p className="text-sm font-semibold uppercase tracking-[0.12em] text-cyan-100/68">
+          {label}
+        </p>
+      </div>
+      <p className="text-sm font-black uppercase tracking-[0.14em] text-white">{value}</p>
+    </div>
+  );
+}
+
+function DirectorFeedCard({ entry }: { entry: DirectorFeedEntry }) {
+  const toneClasses =
+    entry.tone === "critical"
+      ? "border-red-300/16 bg-red-400/8"
+      : entry.tone === "alert"
+        ? "border-orange-300/16 bg-orange-400/8"
+        : "border-cyan-300/14 bg-black/18";
+
+  const badgeClasses =
+    entry.tone === "critical"
+      ? "text-red-100/74"
+      : entry.tone === "alert"
+        ? "text-orange-100/74"
+        : "text-cyan-100/68";
+
+  return (
+    <article className={`border px-4 py-3 ${toneClasses}`}>
+      <div className="flex items-start justify-between gap-3">
+        <p className="font-display text-sm font-black uppercase tracking-[0.08em] text-white">
+          {entry.title}
+        </p>
+        <span className={`text-[0.62rem] font-semibold uppercase tracking-[0.18em] ${badgeClasses}`}>
+          {entry.tone === "critical" ? "Critical" : entry.tone === "alert" ? "Priority" : "Live"}
+        </span>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-cyan-100/70">{entry.body}</p>
+    </article>
+  );
+}
+
+function ReportBlock({ body, title }: { body: string; title: string }) {
+  return (
+    <div className="metric-tile px-4 py-3">
+      <p className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/54">
+        {title}
+      </p>
+      <p className="mt-3 text-sm leading-6 text-cyan-100/72">{body}</p>
+    </div>
+  );
+}
+
 function getStatusLabel(status: RaidHudState["status"]): string {
   if (status === "operator-down") {
-    return "Down";
+    return "Wipeout";
   }
 
   if (status === "boss-entry") {
-    return "Core";
+    return "Core inbound";
   }
 
   if (status === "boss") {
-    return "Boss";
+    return "Boss fight";
   }
 
   if (status === "victory") {
@@ -574,11 +971,11 @@ function getStatusLabel(status: RaidHudState["status"]): string {
   }
 
   if (status === "upgrade") {
-    return "Upgrade";
+    return "Upgrade draft";
   }
 
   if (status === "ai-event") {
-    return "AI Event";
+    return "AI event";
   }
 
   return "Live";
