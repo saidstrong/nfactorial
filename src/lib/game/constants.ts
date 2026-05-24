@@ -1,0 +1,41 @@
+export const RAID_GAME_WIDTH = 960;
+export const RAID_GAME_HEIGHT = 620;
+export const RAID_ARENA_PADDING = 28;
+
+export const RAID_PLAYER = {
+  maxHp: 100,
+  radius: 15,
+  speed: 245,
+  dashSpeed: 620,
+  dashDurationMs: 145,
+  dashCooldownMs: 1500,
+  bulletDamage: 18,
+  fireRateMs: 260,
+};
+
+export const RAID_BULLET = {
+  radius: 5,
+  speed: 620,
+  lifetimeMs: 900,
+};
+
+export const RAID_CRAWLER = {
+  radius: 14,
+  hp: 36,
+  speed: 105,
+  damage: 10,
+  contactCooldownMs: 650,
+  scoreValue: 120,
+  spawnEveryMs: 1150,
+  maxAlive: 14,
+};
+
+export const INITIAL_RAID_HUD = {
+  hp: RAID_PLAYER.maxHp,
+  maxHp: RAID_PLAYER.maxHp,
+  score: 0,
+  kills: 0,
+  enemiesAlive: 0,
+  status: "running" as const,
+  dashReady: true,
+};

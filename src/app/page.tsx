@@ -1,24 +1,24 @@
 import Link from "next/link";
 
 const rules = [
-  "Reveal nodes to restore safe parts of the power grid.",
-  "Numbers report how many nearby nodes are corrupted.",
-  "Quarantine suspected threats before opening their sector.",
-  "Restore every safe node to complete the mission.",
+  "Move through a top-down cyber arena with WASD and dash out of danger.",
+  "Aim with the mouse and fire pulse shots into incoming enemy waves.",
+  "Earn score by clearing corrupted crawlers before they overwhelm you.",
+  "Later phases add upgrades, adaptive events, and the Blackout Core boss.",
 ];
 
 const featureCards = [
   {
-    title: "Corrupted Grid Logic",
-    body: "A 10x10 city network hides 15 corrupted nodes behind dark tiles.",
+    title: "Top-Down Cyber Raid",
+    body: "Enter a dark digital arena built for fast movement, aim, and dodging.",
   },
   {
-    title: "Quarantine Markers",
-    body: "Flag hidden cells when the pattern suggests a dangerous node.",
+    title: "Enemy Waves",
+    body: "Crawler bots push the operator from the edges and punish bad spacing.",
   },
   {
-    title: "Command-Center Flow",
-    body: "Track status, flags, and safe restores from a compact mission panel.",
+    title: "AI Director Later",
+    body: "Upcoming passes add upgrades and an adaptive boss directed by AI.",
   },
 ];
 
@@ -31,7 +31,7 @@ export default function Home() {
             className="text-lg font-black tracking-[0.2em] text-white"
             href="/"
           >
-            BLACKOUT GRID
+            BLACKOUT RAID
           </Link>
           <Link
             className="border border-cyan-300/50 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-300/10"
@@ -44,22 +44,23 @@ export default function Home() {
         <div className="grid items-center gap-10 lg:grid-cols-[1fr_0.85fr]">
           <div className="max-w-3xl">
             <h1 className="text-5xl font-black tracking-[0.08em] text-white sm:text-6xl lg:text-7xl">
-              BLACKOUT GRID
+              BLACKOUT RAID
             </h1>
             <p className="mt-5 text-xl font-semibold text-cyan-100 sm:text-2xl">
-              Restore the city grid before the blackout spreads.
+              Survive the AI-directed dungeon.
             </p>
             <p className="mt-5 max-w-2xl text-base leading-7 text-cyan-100/70">
-              A rogue signal has corrupted hidden nodes inside the city power
-              network. Reveal safe nodes, quarantine threats, and keep the
-              mission under control.
+              A top-down cyber raid where an Operator fights corrupted enemy
+              waves inside a hostile digital arena. Upgrades and the adaptive AI
+              boss arrive in later phases; the first mission is pure movement,
+              aiming, and survival.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Link
                 className="border border-cyan-300 bg-cyan-300 px-6 py-3 text-center text-sm font-black uppercase tracking-[0.16em] text-[#021012] transition hover:bg-cyan-200"
                 href="/play"
               >
-                Start Mission
+                Start Raid
               </Link>
               <a
                 className="border border-amber-300/60 px-6 py-3 text-center text-sm font-bold uppercase tracking-[0.16em] text-amber-100 transition hover:border-amber-200 hover:bg-amber-300/10"
@@ -71,30 +72,20 @@ export default function Home() {
           </div>
 
           <div className="scanline border border-cyan-300/20 bg-[#061016]/90 p-5 shadow-[0_0_42px_rgba(45,212,191,0.12)]">
-            <div className="grid grid-cols-5 gap-1">
-              {Array.from({ length: 25 }, (_, index) => {
-                const isThreat = [4, 11, 18].includes(index);
-                const isFlagged = [7, 21].includes(index);
-                const isOpen = [0, 1, 2, 5, 6, 10, 12, 16].includes(index);
-
-                return (
-                  <div
-                    className={[
-                      "flex aspect-square items-center justify-center border text-center text-sm font-black sm:text-base",
-                      isThreat
-                        ? "border-red-400 bg-[#2a0808] text-red-100"
-                        : isFlagged
-                          ? "border-amber-400 bg-[#201307] text-amber-200"
-                          : isOpen
-                            ? "border-[#24434b] bg-[#101b21] text-cyan-100/70"
-                            : "border-[#15343b] bg-[#071117]",
-                    ].join(" ")}
-                    key={index}
-                  >
-                    {isThreat ? "X" : isFlagged ? "Q" : isOpen && index % 3 ? "1" : ""}
-                  </div>
-                );
-              })}
+            <div className="relative aspect-[4/3] overflow-hidden border border-cyan-300/20 bg-[#02060b]">
+              <div className="absolute inset-0 bg-[linear-gradient(rgba(42,252,219,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(42,252,219,0.08)_1px,transparent_1px)] bg-[size:42px_42px]" />
+              <div className="absolute left-[46%] top-[45%] h-10 w-10 rounded-full border-2 border-cyan-100 bg-cyan-300 shadow-[0_0_28px_rgba(45,212,191,0.75)]" />
+              <div className="absolute left-[54%] top-[47%] h-1 w-24 origin-left rotate-[-18deg] bg-cyan-200 shadow-[0_0_18px_rgba(115,247,255,0.9)]" />
+              {[12, 24, 38, 62, 74].map((left, index) => (
+                <div
+                  className="absolute h-8 w-8 rounded-full border-2 border-orange-200 bg-orange-600 shadow-[0_0_22px_rgba(255,90,31,0.55)]"
+                  key={left}
+                  style={{
+                    left: `${left}%`,
+                    top: `${index % 2 === 0 ? 20 + index * 9 : 62 - index * 4}%`,
+                  }}
+                />
+              ))}
             </div>
           </div>
         </div>

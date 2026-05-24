@@ -1,5 +1,5 @@
-import { BlackoutGame } from "@/components/game/BlackoutGame";
+import { RaidShell } from "@/components/game/RaidShell";
 
 export default function PlayPage() {
-  return <BlackoutGame />;
+  return <RaidShell />;
 }
