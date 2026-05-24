@@ -15,6 +15,15 @@ import {
 } from "@/lib/game/constants";
 import { getFallbackBossMode } from "@/lib/game/bossModes";
 import type {
+  AiEventDirective,
+  AiEventModifier,
+  AiEventRequest,
+  AiEventSelection,
+  BossPhaseRequest,
+  BossPhaseSelection,
+  RaidEndReport,
+} from "@/lib/ai/fallbacks";
+import type {
   BossMode,
   EnemyKind,
   RaidHudState,
@@ -70,17 +79,29 @@ type ShockwaveState = {
 };
 
 type SceneControls = {
+  applyAiEvent: (directive: AiEventDirective) => void;
+  applyBossPhaseDirective: (selection: BossPhaseSelection) => void;
   applyUpgrade: (upgradeId: UpgradeId) => void;
 };
 
 type PhaserRaidGameProps = {
+  aiEventSelection: AiEventSelection | null;
+  bossPhaseSelection: BossPhaseSelection | null;
+  onAiEventRequest: (request: AiEventRequest) => void;
+  onBossPhaseRequest: (phase: 2 | 3, request: BossPhaseRequest) => void;
   onHudChange: (hud: RaidHudState) => void;
+  onRaidEnd: (report: RaidEndReport) => void;
   onUpgradeOffer: (upgrades: UpgradeOption[] | null) => void;
   upgradeSelection: UpgradeSelection | null;
 };
 
 export function PhaserRaidGame({
+  aiEventSelection,
+  bossPhaseSelection,
+  onAiEventRequest,
+  onBossPhaseRequest,
   onHudChange,
+  onRaidEnd,
   onUpgradeOffer,
   upgradeSelection,
 }: PhaserRaidGameProps) {
@@ -93,6 +114,18 @@ export function PhaserRaidGame({
       sceneControlsRef.current?.applyUpgrade(upgradeSelection.id);
     }
   }, [upgradeSelection]);
+
+  useEffect(() => {
+    if (aiEventSelection) {
+      sceneControlsRef.current?.applyAiEvent(aiEventSelection.directive);
+    }
+  }, [aiEventSelection]);
+
+  useEffect(() => {
+    if (bossPhaseSelection) {
+      sceneControlsRef.current?.applyBossPhaseDirective(bossPhaseSelection);
+    }
+  }, [bossPhaseSelection]);
 
   useEffect(() => {
     let isMounted = true;
@@ -126,11 +159,19 @@ export function PhaserRaidGame({
         private score = 0;
         private kills = 0;
         private damageTaken = 0;
+        private damageDealt = 0;
+        private shotsFired = 0;
+        private shotsHit = 0;
+        private roomsCleared = 0;
         private fireRateMs = RAID_PLAYER.fireRateMs;
         private dashCooldownMs = RAID_PLAYER.dashCooldownMs;
         private bulletDamage = RAID_PLAYER.bulletDamage;
         private bulletPierce = 0;
         private critChance = 0;
+        private waveEventModifier: AiEventModifier | null = null;
+        private waveEnemySpeedMultiplier = 1;
+        private waveBulletDamageMultiplier = 1;
+        private waveDashCooldownMultiplier = 1;
         private lastShotAt = 0;
         private lastDashAt = -RAID_PLAYER.dashCooldownMs;
         private dashUntil = 0;
@@ -148,7 +189,9 @@ export function PhaserRaidGame({
         private nextBossSummonAt = 0;
         private nextBossShockwaveAt = 0;
         private bossAttackCounter = 0;
+        private bossFightStartedAt = 0;
         private lastBossContactDamageAt = 0;
+        private raidEndReported = false;
 
         constructor() {
           super("raid-arena");
@@ -191,6 +234,9 @@ export function PhaserRaidGame({
           this.input.mouse?.disableContextMenu();
 
           sceneControlsRef.current = {
+            applyAiEvent: (directive) => this.applyAiEvent(directive),
+            applyBossPhaseDirective: (selection) =>
+              this.applyBossPhaseDirective(selection),
             applyUpgrade: (upgradeId) => this.applyUpgrade(upgradeId),
           };
 
@@ -206,7 +252,11 @@ export function PhaserRaidGame({
             return;
           }
 
-          if (this.raidStatus === "boss-entry" || this.raidStatus === "upgrade") {
+          if (
+            this.raidStatus === "boss-entry" ||
+            this.raidStatus === "upgrade" ||
+            this.raidStatus === "ai-event"
+          ) {
             this.emitHud();
             return;
           }
@@ -233,11 +283,19 @@ export function PhaserRaidGame({
           this.score = 0;
           this.kills = 0;
           this.damageTaken = 0;
+          this.damageDealt = 0;
+          this.shotsFired = 0;
+          this.shotsHit = 0;
+          this.roomsCleared = 0;
           this.fireRateMs = RAID_PLAYER.fireRateMs;
           this.dashCooldownMs = RAID_PLAYER.dashCooldownMs;
           this.bulletDamage = RAID_PLAYER.bulletDamage;
           this.bulletPierce = 0;
           this.critChance = 0;
+          this.waveEventModifier = null;
+          this.waveEnemySpeedMultiplier = 1;
+          this.waveBulletDamageMultiplier = 1;
+          this.waveDashCooldownMultiplier = 1;
           this.lastShotAt = 0;
           this.lastDashAt = -RAID_PLAYER.dashCooldownMs;
           this.dashUntil = 0;
@@ -258,7 +316,9 @@ export function PhaserRaidGame({
           this.nextBossSummonAt = 0;
           this.nextBossShockwaveAt = 0;
           this.bossAttackCounter = 0;
+          this.bossFightStartedAt = 0;
           this.lastBossContactDamageAt = 0;
+          this.raidEndReported = false;
           onUpgradeOffer(null);
         }
 
@@ -322,12 +382,14 @@ export function PhaserRaidGame({
           this.clearEnemyProjectiles();
 
           const wave = RAID_WAVES[waveIndex];
+          const extraDrones =
+            waveIndex === 2 && this.waveEventModifier === "DRONE_SWARM" ? 2 : 0;
 
           for (let index = 0; index < wave.crawlers; index += 1) {
             this.spawnCrawler(index);
           }
 
-          for (let index = 0; index < wave.drones; index += 1) {
+          for (let index = 0; index < wave.drones + extraDrones; index += 1) {
             this.spawnDrone(index);
           }
 
@@ -361,7 +423,7 @@ export function PhaserRaidGame({
         }
 
         private tryDash(time: number, move: import("phaser").Math.Vector2) {
-          if (time - this.lastDashAt < this.dashCooldownMs) {
+          if (time - this.lastDashAt < this.getDashCooldownMs()) {
             return;
           }
 
@@ -380,6 +442,10 @@ export function PhaserRaidGame({
           this.player.body.setVelocity(dashDirection.x, dashDirection.y);
           this.lastDashAt = time;
           this.dashUntil = time + RAID_PLAYER.dashDurationMs;
+        }
+
+        private getDashCooldownMs(): number {
+          return Math.round(this.dashCooldownMs * this.waveDashCooldownMultiplier);
         }
 
         private updateAimLine() {
@@ -421,16 +487,18 @@ export function PhaserRaidGame({
             pointer.worldY,
           );
           const isCritical = this.critChance > 0 && Math.random() < this.critChance;
+          const shotDamage = Math.round(this.bulletDamage * this.waveBulletDamageMultiplier);
 
           this.spawnBullet({
             angle,
-            damage: isCritical ? this.bulletDamage * 2 : this.bulletDamage,
+            damage: isCritical ? shotDamage * 2 : shotDamage,
             owner: "player",
             pierceRemaining: this.bulletPierce,
             speed: RAID_BULLET.speed,
             x: this.player.x + Math.cos(angle) * 22,
             y: this.player.y + Math.sin(angle) * 22,
           });
+          this.shotsFired += 1;
           this.lastShotAt = time;
         }
 
@@ -492,7 +560,7 @@ export function PhaserRaidGame({
           crawler.kind = "crawler";
           crawler.lastShotAt = 0;
           crawler.scoreValue = RAID_CRAWLER.scoreValue;
-          crawler.speed = RAID_CRAWLER.speed;
+          crawler.speed = Math.round(RAID_CRAWLER.speed * this.getEnemySpeedMultiplier());
           this.nextEnemyId += 1;
 
           this.physics.add.existing(crawler);
@@ -518,7 +586,7 @@ export function PhaserRaidGame({
           drone.kind = "drone";
           drone.lastShotAt = this.time.now + index * 180;
           drone.scoreValue = RAID_DRONE.scoreValue;
-          drone.speed = RAID_DRONE.speed;
+          drone.speed = Math.round(RAID_DRONE.speed * this.getEnemySpeedMultiplier());
           this.nextEnemyId += 1;
 
           this.physics.add.existing(drone);
@@ -526,6 +594,14 @@ export function PhaserRaidGame({
           drone.body.setCollideWorldBounds(true);
           drone.body.setAllowGravity(false);
           this.enemies.add(drone);
+        }
+
+        private getEnemySpeedMultiplier(): number {
+          if (this.raidStatus === "running" && this.currentWaveIndex === 2) {
+            return this.waveEnemySpeedMultiplier;
+          }
+
+          return 1;
         }
 
         private getEdgeSpawnPoint(index: number): { x: number; y: number } {
@@ -665,7 +741,10 @@ export function PhaserRaidGame({
           }
 
           bullet.hitEnemyIds.add(enemy.enemyId);
+          const damageDealt = Math.min(enemy.hp, bullet.damage);
           enemy.hp -= bullet.damage;
+          this.damageDealt += damageDealt;
+          this.shotsHit += 1;
 
           if (enemy.hp <= 0) {
             enemy.destroy();
@@ -741,6 +820,7 @@ export function PhaserRaidGame({
 
           this.player.body.setVelocity(0, 0);
           this.clearProjectiles();
+          this.roomsCleared = Math.max(this.roomsCleared, this.currentWaveIndex + 1);
 
           if (this.currentWaveIndex >= RAID_WAVES.length - 1) {
             this.enterBossEntry();
@@ -783,10 +863,62 @@ export function PhaserRaidGame({
 
           this.selectedUpgrades = [...this.selectedUpgrades, upgrade];
           onUpgradeOffer(null);
-          this.startWave(this.currentWaveIndex + 1);
+
+          const nextWaveIndex = this.currentWaveIndex + 1;
+
+          if (nextWaveIndex === 2) {
+            this.enterAiEventIntermission();
+          } else {
+            this.startWave(nextWaveIndex);
+          }
+        }
+
+        private enterAiEventIntermission() {
+          this.raidStatus = "ai-event";
+          this.statusText = "AI Director analyzing Wave 3 breach conditions.";
+          this.player.body.setVelocity(0, 0);
+          this.clearProjectiles();
+          this.showStateText(
+            "AI DIRECTOR UPLINK",
+            "Wave 3 crisis event pending operator confirmation.",
+          );
+          onAiEventRequest({
+            damageTaken: this.damageTaken,
+            kills: this.kills,
+            playerHp: this.hp,
+            selectedUpgrades: this.selectedUpgrades.map((upgrade) => upgrade.name),
+            wave: 3,
+          });
+          this.emitHud(true);
+        }
+
+        private applyAiEvent(directive: AiEventDirective) {
+          if (this.raidStatus !== "ai-event") {
+            return;
+          }
+
+          this.waveEventModifier = directive.modifier;
+          this.waveEnemySpeedMultiplier = directive.modifier === "POWER_SURGE" ? 1.18 : 1;
+          this.waveBulletDamageMultiplier =
+            directive.modifier === "OVERCHARGED_WEAPONS" ? 1.2 : 1;
+          this.waveDashCooldownMultiplier =
+            directive.modifier === "SYSTEM_LAG" ? 1.25 : 1;
+
+          if (directive.modifier === "EMERGENCY_CACHE") {
+            this.hp = Math.min(this.maxHp, this.hp + 25);
+          }
+
+          this.statusText = `${directive.eventTitle}: ${directive.eventText}`;
+          this.showStateText(directive.eventTitle.toUpperCase(), directive.eventText);
+          this.time.delayedCall(950, () => {
+            if (this.raidStatus === "ai-event") {
+              this.startWave(2);
+            }
+          });
         }
 
         private enterBossEntry() {
+          this.clearWaveEventModifiers();
           this.raidStatus = "boss-entry";
           this.statusText = "BLACKOUT CORE DETECTED. Final threat inbound.";
           this.showStateText(
@@ -815,6 +947,7 @@ export function PhaserRaidGame({
           this.nextBossSummonAt = this.time.now + RAID_BOSS.summonCooldownMs;
           this.nextBossShockwaveAt = this.time.now + RAID_BOSS.shockwaveCooldownMs;
           this.bossAttackCounter = 0;
+          this.bossFightStartedAt = this.time.now;
 
           this.bossAura = this.add.graphics();
           this.boss = this.add.circle(
@@ -848,6 +981,13 @@ export function PhaserRaidGame({
             1350,
           );
           this.emitHud(true);
+        }
+
+        private clearWaveEventModifiers() {
+          this.waveEventModifier = null;
+          this.waveEnemySpeedMultiplier = 1;
+          this.waveBulletDamageMultiplier = 1;
+          this.waveDashCooldownMultiplier = 1;
         }
 
         private updateBoss(time: number) {
@@ -907,7 +1047,7 @@ export function PhaserRaidGame({
         private transitionBossPhase(phase: 2 | 3, mode: BossMode) {
           this.bossPhase = phase;
           this.bossMode = mode;
-          this.bossModeHistory = [...this.bossModeHistory, mode];
+          this.recordBossMode(mode);
           this.cameras.main.shake(320, 0.01);
 
           if (phase === 2) {
@@ -928,6 +1068,60 @@ export function PhaserRaidGame({
             this.startShockwave();
             this.nextBossSummonAt = this.time.now + 850;
           }
+
+          onBossPhaseRequest(phase, this.buildBossPhaseRequest(mode));
+          this.emitHud(true);
+        }
+
+        private applyBossPhaseDirective(selection: BossPhaseSelection) {
+          if (
+            this.raidStatus !== "boss" ||
+            this.bossPhase !== selection.phase ||
+            !this.boss?.active
+          ) {
+            return;
+          }
+
+          this.bossMode = selection.directive.bossMode;
+          this.recordBossMode(selection.directive.bossMode);
+          this.statusText = selection.directive.message;
+          this.showTransientStateText(
+            selection.directive.phaseTitle.toUpperCase(),
+            selection.directive.message,
+            1750,
+          );
+          this.cameras.main.shake(180, 0.006);
+          this.emitHud(true);
+        }
+
+        private buildBossPhaseRequest(currentMode: BossMode): BossPhaseRequest {
+          const bossHpPercent = this.boss
+            ? Math.round((this.boss.hp / this.boss.maxHp) * 100)
+            : 0;
+          const accuracyEstimate =
+            this.shotsFired > 0 ? Math.min(1, this.shotsHit / this.shotsFired) : 0;
+
+          return {
+            accuracyEstimate: Math.round(accuracyEstimate * 100) / 100,
+            bossHpPercent,
+            currentMode,
+            damageDealt: Math.round(this.damageDealt),
+            damageTaken: this.damageTaken,
+            fightDurationSeconds: Math.max(
+              0,
+              Math.round((this.time.now - this.bossFightStartedAt) / 1000),
+            ),
+            kills: this.kills,
+            playerHp: this.hp,
+          };
+        }
+
+        private recordBossMode(mode: BossMode) {
+          const lastMode = this.bossModeHistory[this.bossModeHistory.length - 1];
+
+          if (lastMode !== mode) {
+            this.bossModeHistory = [...this.bossModeHistory, mode];
+          }
         }
 
         private executeBossAttack(time: number) {
@@ -940,31 +1134,75 @@ export function PhaserRaidGame({
               this.bossSummonMinions(1, 0);
             }
           } else if (this.bossPhase === 2) {
-            if (this.bossMode === "summoner" && this.bossAttackCounter % 3 === 0) {
-              this.bossSummonMinions(2, 1);
-            } else if (this.bossAttackCounter % 4 === 0) {
-              this.bossRadialBurst(12, RAID_BOSS.radialShotSpeed);
-            } else {
-              this.bossAimedShot(2);
-            }
+            this.executeModeAttack(2);
           } else {
-            if (this.bossAttackCounter % 2 === 0) {
-              this.bossRadialBurst(18, RAID_BOSS.radialShotSpeed + 35);
-            } else {
-              this.bossAimedShot(3);
-            }
+            this.executeModeAttack(3);
           }
 
           this.nextBossAttackAt = time + this.getBossAttackCadence();
         }
 
+        private executeModeAttack(phase: 2 | 3) {
+          const isOverload = phase === 3;
+
+          if (this.bossMode === "summoner") {
+            if (this.bossAttackCounter % (isOverload ? 2 : 3) === 0) {
+              this.bossSummonMinions(2, 1);
+            } else {
+              this.bossAimedShot(isOverload ? 3 : 2);
+            }
+            return;
+          }
+
+          if (this.bossMode === "bullet_hell") {
+            if (this.bossAttackCounter % 2 === 0) {
+              this.bossRadialBurst(isOverload ? 20 : 14, RAID_BOSS.radialShotSpeed + 35);
+            } else {
+              this.bossAimedShot(isOverload ? 3 : 2);
+            }
+            return;
+          }
+
+          if (this.bossMode === "sniper") {
+            this.bossAimedShot(isOverload ? 4 : 3);
+            return;
+          }
+
+          if (this.bossMode === "hunter" || this.bossMode === "berserker") {
+            if (this.bossAttackCounter % (this.bossMode === "berserker" ? 3 : 5) === 0) {
+              this.startShockwave();
+            }
+
+            this.bossAimedShot(isOverload ? 3 : 2);
+            return;
+          }
+
+          if (this.bossMode === "shield_core") {
+            if (this.bossAttackCounter % 4 === 0) {
+              this.bossSummonMinions(1, isOverload ? 2 : 1);
+            } else {
+              this.bossRadialBurst(isOverload ? 16 : 10, RAID_BOSS.radialShotSpeed);
+            }
+            return;
+          }
+
+          this.bossAimedShot(isOverload ? 3 : 2);
+        }
+
         private getBossAttackCadence(): number {
+          const modeAdjustment =
+            this.bossMode === "berserker" || this.bossMode === "bullet_hell"
+              ? -90
+              : this.bossMode === "sniper"
+                ? 110
+                : 0;
+
           if (this.bossPhase === 3) {
-            return RAID_BOSS.phaseThreeAttackMs;
+            return Math.max(420, RAID_BOSS.phaseThreeAttackMs + modeAdjustment);
           }
 
           if (this.bossPhase === 2) {
-            return RAID_BOSS.phaseTwoAttackMs;
+            return Math.max(560, RAID_BOSS.phaseTwoAttackMs + modeAdjustment);
           }
 
           return RAID_BOSS.phaseOneAttackMs;
@@ -1121,7 +1359,10 @@ export function PhaserRaidGame({
             return;
           }
 
+          const damageDealt = Math.min(boss.hp, bullet.damage);
           boss.hp = Math.max(0, boss.hp - bullet.damage);
+          this.damageDealt += damageDealt;
+          this.shotsHit += 1;
           bullet.destroy();
 
           if (boss.hp <= 0) {
@@ -1150,6 +1391,7 @@ export function PhaserRaidGame({
           this.cameras.main.shake(420, 0.012);
           this.showStateText("CORE DESTROYED", "Victory. Press R or use Restart Raid.");
           this.emitHud(true);
+          this.reportRaidEnd("victory");
         }
 
         private endRaid() {
@@ -1165,6 +1407,24 @@ export function PhaserRaidGame({
           this.showStateText("OPERATOR DOWN", "Press R or use Restart Raid.");
           onUpgradeOffer(null);
           this.emitHud(true);
+          this.reportRaidEnd("wipeout");
+        }
+
+        private reportRaidEnd(result: RaidEndReport["result"]) {
+          if (this.raidEndReported) {
+            return;
+          }
+
+          this.raidEndReported = true;
+          onRaidEnd({
+            bossModeHistory: this.bossModeHistory,
+            damageTaken: this.damageTaken,
+            kills: this.kills,
+            result,
+            roomsCleared: this.roomsCleared,
+            score: this.score,
+            upgrades: this.selectedUpgrades.map((upgrade) => upgrade.name),
+          });
         }
 
         private clearEnemyProjectiles() {
@@ -1202,9 +1462,11 @@ export function PhaserRaidGame({
             RAID_GAME_HEIGHT / 2 + 28,
             subtitle,
             {
+              align: "center",
               color: "#c8f7ff",
               fontFamily: "Segoe UI, Arial, sans-serif",
               fontSize: "16px",
+              wordWrap: { width: 430 },
             },
           ).setOrigin(0.5);
           this.stateOverlayObjects = [panel, titleText, subtitleText];
@@ -1239,9 +1501,9 @@ export function PhaserRaidGame({
           onHudChange({
             dashCooldownRemainingMs: Math.max(
               0,
-              this.dashCooldownMs - (time - this.lastDashAt),
+              this.getDashCooldownMs() - (time - this.lastDashAt),
             ),
-            dashReady: time - this.lastDashAt >= this.dashCooldownMs,
+            dashReady: time - this.lastDashAt >= this.getDashCooldownMs(),
             enemiesAlive: this.enemies?.countActive(true) ?? 0,
             damageTaken: this.damageTaken,
             hp: this.hp,
@@ -1293,7 +1555,13 @@ export function PhaserRaidGame({
       gameRef.current?.destroy(true);
       gameRef.current = null;
     };
-  }, [onHudChange, onUpgradeOffer]);
+  }, [
+    onAiEventRequest,
+    onBossPhaseRequest,
+    onHudChange,
+    onRaidEnd,
+    onUpgradeOffer,
+  ]);
 
   return <div ref={mountRef} className="min-h-[360px] w-full bg-[#02060b]" />;
 }

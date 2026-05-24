@@ -1,6 +1,7 @@
 export type RaidStatus =
   | "running"
   | "upgrade"
+  | "ai-event"
   | "boss-entry"
   | "boss"
   | "victory"
