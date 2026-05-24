@@ -33,7 +33,10 @@ export function RaidShell() {
 
   const hpPercent = Math.max(0, Math.round((hud.hp / hud.maxHp) * 100));
   const isDefeated = hud.status === "operator-down";
-  const isBossSignal = hud.status === "boss-signal";
+  const isVictory = hud.status === "victory";
+  const showBossHud = hud.status === "boss" || hud.status === "victory";
+  const bossHpPercent =
+    hud.bossMaxHp > 0 ? Math.max(0, Math.round((hud.bossHp / hud.bossMaxHp) * 100)) : 0;
   const dashLabel = hud.dashReady
     ? "Ready"
     : `${Math.ceil(hud.dashCooldownRemainingMs / 100) / 10}s`;
@@ -51,9 +54,9 @@ export function RaidShell() {
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 text-right sm:grid-cols-4">
-            <HudMetric label="Wave" value={`${hud.wave}/${hud.totalWaves}`} />
-            <HudMetric label="Score" value={hud.score} />
-            <HudMetric label="Kills" value={hud.kills} />
+              <HudMetric label="Wave" value={`${hud.wave}/${hud.totalWaves}`} />
+              <HudMetric label="Score" value={hud.score} />
+              <HudMetric label="Kills" value={hud.kills} />
             <HudMetric label="Status" value={getStatusLabel(hud.status)} />
           </div>
         </header>
@@ -110,6 +113,34 @@ export function RaidShell() {
               </div>
             </div>
 
+            {showBossHud ? (
+              <section className="mt-5 border border-orange-300/25 bg-[#220b05]/40 p-4">
+                <div className="mb-3 flex items-end justify-between">
+                  <div>
+                    <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-orange-100/60">
+                      The Blackout Core
+                    </p>
+                    <p className="mt-1 text-2xl font-black text-white">
+                      {hud.bossHp}/{hud.bossMaxHp}
+                    </p>
+                  </div>
+                  <span className="text-xs font-black uppercase tracking-[0.18em] text-orange-100/75">
+                    {bossHpPercent}%
+                  </span>
+                </div>
+                <div className="h-3 overflow-hidden bg-[#2a1009]">
+                  <div
+                    className="h-full bg-orange-400 transition-all"
+                    style={{ width: `${bossHpPercent}%` }}
+                  />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <HudMetric label="Phase" value={hud.bossPhase ?? "-"} />
+                  <HudMetric label="Mode" value={formatBossMode(hud.bossMode)} />
+                </div>
+              </section>
+            ) : null}
+
             <div className="mt-4 grid grid-cols-2 gap-3">
               <HudMetric label="Enemies" value={hud.enemiesAlive} />
               <HudMetric label="Dash" value={dashLabel} />
@@ -160,17 +191,19 @@ export function RaidShell() {
 
             {isDefeated ? (
               <ResultPanel
-                body={`Final score ${hud.score}. Hostiles neutralized ${hud.kills}.`}
+                body="The raid collapsed before the Core was destroyed."
                 heading="Operator Down"
-                label="Raid Failed"
+                hud={hud}
+                label="Wipeout"
                 onRestart={handleRestart}
                 tone="danger"
               />
-            ) : isBossSignal ? (
+            ) : isVictory ? (
               <ResultPanel
-                body="Boss signal detected - next phase coming."
-                heading="Phase 3 Complete"
-                label="Raid Placeholder"
+                body="The Blackout Core is offline. Raid complete."
+                heading="Core Destroyed"
+                hud={hud}
+                label="Victory"
                 onRestart={handleRestart}
                 tone="success"
               />
@@ -233,12 +266,14 @@ function UpgradeOverlay({
 function ResultPanel({
   body,
   heading,
+  hud,
   label,
   onRestart,
   tone,
 }: {
   body: string;
   heading: string;
+  hud: RaidHudState;
   label: string;
   onRestart: () => void;
   tone: "danger" | "success";
@@ -255,6 +290,32 @@ function ResultPanel({
         {heading}
       </h3>
       <p className="mt-3 text-sm leading-6 text-cyan-100/70">{body}</p>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <HudMetric label="Score" value={hud.score} />
+        <HudMetric label="Kills" value={hud.kills} />
+        <HudMetric label="Damage Taken" value={hud.damageTaken} />
+        <HudMetric label="Modes Faced" value={hud.bossModeHistory.length || "-"} />
+      </div>
+      {hud.selectedUpgrades.length > 0 ? (
+        <div className="mt-4">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
+            Upgrades Selected
+          </p>
+          <p className="mt-2 text-sm leading-6 text-cyan-100/70">
+            {hud.selectedUpgrades.map((upgrade) => upgrade.name).join(", ")}
+          </p>
+        </div>
+      ) : null}
+      {hud.bossModeHistory.length > 0 ? (
+        <div className="mt-4">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/55">
+            Boss Modes Faced
+          </p>
+          <p className="mt-2 text-sm leading-6 text-cyan-100/70">
+            {hud.bossModeHistory.map(formatBossMode).join(", ")}
+          </p>
+        </div>
+      ) : null}
       <button
         className="mt-4 w-full border border-cyan-300 bg-cyan-300 px-4 py-3 text-sm font-bold uppercase tracking-[0.16em] text-[#021012] transition hover:bg-cyan-200"
         onClick={onRestart}
@@ -282,13 +343,32 @@ function getStatusLabel(status: RaidHudState["status"]): string {
     return "Down";
   }
 
+  if (status === "boss-entry") {
+    return "Core";
+  }
+
+  if (status === "boss") {
+    return "Boss";
+  }
+
+  if (status === "victory") {
+    return "Victory";
+  }
+
   if (status === "upgrade") {
     return "Upgrade";
   }
 
-  if (status === "boss-signal") {
-    return "Signal";
+  return "Live";
+}
+
+function formatBossMode(mode: RaidHudState["bossMode"]): string {
+  if (!mode) {
+    return "-";
   }
 
-  return "Live";
+  return mode
+    .split("_")
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
 }

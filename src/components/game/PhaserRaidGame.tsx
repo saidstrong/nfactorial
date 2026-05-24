@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import {
   RAID_ARENA_PADDING,
+  RAID_BOSS,
   RAID_BULLET,
   RAID_CRAWLER,
   RAID_DRONE,
@@ -12,7 +13,9 @@ import {
   RAID_PLAYER,
   RAID_WAVES,
 } from "@/lib/game/constants";
+import { getFallbackBossMode } from "@/lib/game/bossModes";
 import type {
+  BossMode,
   EnemyKind,
   RaidHudState,
   RaidStatus,
@@ -34,7 +37,7 @@ type PhysicsRectangle = import("phaser").GameObjects.Rectangle & {
 };
 type PhysicsEnemy = (PhysicsArc | PhysicsRectangle) & { body: ArcadeBody };
 
-type BulletOwner = "player" | "enemy";
+type BulletOwner = "player" | "enemy" | "boss";
 
 type BulletSprite = PhysicsArc & {
   bornAt: number;
@@ -51,6 +54,19 @@ type EnemySprite = PhysicsEnemy & {
   lastShotAt: number;
   scoreValue: number;
   speed: number;
+};
+
+type BossSprite = PhysicsArc & {
+  hp: number;
+  maxHp: number;
+};
+
+type ShockwaveState = {
+  damagedPlayer: boolean;
+  maxRadius: number;
+  ring: Graphics;
+  startedAt: number;
+  durationMs: number;
 };
 
 type SceneControls = {
@@ -99,13 +115,17 @@ export function PhaserRaidGame({
         private playerBullets!: ArcadeGroup;
         private enemyBullets!: ArcadeGroup;
         private enemies!: ArcadeGroup;
+        private boss?: BossSprite;
+        private bossAura?: Graphics;
         private aimLine!: Graphics;
         private stateOverlayObjects: GameObject[] = [];
+        private activeShockwave: ShockwaveState | null = null;
         private keys!: Record<"W" | "A" | "S" | "D" | "SPACE" | "R", KeyboardKey>;
         private hp = RAID_PLAYER.maxHp;
         private maxHp = RAID_PLAYER.maxHp;
         private score = 0;
         private kills = 0;
+        private damageTaken = 0;
         private fireRateMs = RAID_PLAYER.fireRateMs;
         private dashCooldownMs = RAID_PLAYER.dashCooldownMs;
         private bulletDamage = RAID_PLAYER.bulletDamage;
@@ -121,6 +141,14 @@ export function PhaserRaidGame({
         private currentWaveIndex = 0;
         private selectedUpgrades: UpgradeOption[] = [];
         private nextEnemyId = 1;
+        private bossPhase: 1 | 2 | 3 | null = null;
+        private bossMode: BossMode | null = null;
+        private bossModeHistory: BossMode[] = [];
+        private nextBossAttackAt = 0;
+        private nextBossSummonAt = 0;
+        private nextBossShockwaveAt = 0;
+        private bossAttackCounter = 0;
+        private lastBossContactDamageAt = 0;
 
         constructor() {
           super("raid-arena");
@@ -170,7 +198,7 @@ export function PhaserRaidGame({
         }
 
         update(time: number) {
-          if (this.raidStatus === "operator-down") {
+          if (this.raidStatus === "operator-down" || this.raidStatus === "victory") {
             if (PhaserLib.Input.Keyboard.JustDown(this.keys.R)) {
               this.scene.restart();
             }
@@ -178,7 +206,7 @@ export function PhaserRaidGame({
             return;
           }
 
-          if (this.raidStatus !== "running") {
+          if (this.raidStatus === "boss-entry" || this.raidStatus === "upgrade") {
             this.emitHud();
             return;
           }
@@ -187,9 +215,15 @@ export function PhaserRaidGame({
           this.updateAimLine();
           this.handleShooting(time);
           this.updateEnemies(time);
+          this.updateBoss(time);
+          this.updateShockwave(time);
           this.updatePlayerBullets(time);
           this.updateEnemyBullets(time);
-          this.checkWaveClear();
+
+          if (this.raidStatus === "running") {
+            this.checkWaveClear();
+          }
+
           this.emitHud();
         }
 
@@ -198,6 +232,7 @@ export function PhaserRaidGame({
           this.maxHp = RAID_PLAYER.maxHp;
           this.score = 0;
           this.kills = 0;
+          this.damageTaken = 0;
           this.fireRateMs = RAID_PLAYER.fireRateMs;
           this.dashCooldownMs = RAID_PLAYER.dashCooldownMs;
           this.bulletDamage = RAID_PLAYER.bulletDamage;
@@ -213,6 +248,17 @@ export function PhaserRaidGame({
           this.currentWaveIndex = 0;
           this.selectedUpgrades = [];
           this.nextEnemyId = 1;
+          this.boss = undefined;
+          this.bossAura = undefined;
+          this.activeShockwave = null;
+          this.bossPhase = null;
+          this.bossMode = null;
+          this.bossModeHistory = [];
+          this.nextBossAttackAt = 0;
+          this.nextBossSummonAt = 0;
+          this.nextBossShockwaveAt = 0;
+          this.bossAttackCounter = 0;
+          this.lastBossContactDamageAt = 0;
           onUpgradeOffer(null);
         }
 
@@ -409,7 +455,7 @@ export function PhaserRaidGame({
             x,
             y,
             owner === "player" ? RAID_BULLET.radius : RAID_ENEMY_BULLET.radius,
-            owner === "player" ? 0x73f7ff : 0xff5a1f,
+            owner === "player" ? 0x73f7ff : owner === "boss" ? 0xff2d1f : 0xff5a1f,
             1,
           ) as BulletSprite;
           bullet.setStrokeStyle(2, owner === "player" ? 0xcfffff : 0xffc08a, 0.9);
@@ -671,11 +717,14 @@ export function PhaserRaidGame({
         }
 
         private damagePlayer(damage: number) {
-          if (this.raidStatus !== "running") {
+          if (this.raidStatus !== "running" && this.raidStatus !== "boss") {
             return;
           }
 
-          this.hp = Math.max(0, this.hp - damage);
+          const actualDamage = Math.min(this.hp, damage);
+
+          this.damageTaken += actualDamage;
+          this.hp = Math.max(0, this.hp - actualDamage);
           this.cameras.main.flash(90, 255, 82, 48, false);
 
           if (this.hp <= 0) {
@@ -694,7 +743,7 @@ export function PhaserRaidGame({
           this.clearProjectiles();
 
           if (this.currentWaveIndex >= RAID_WAVES.length - 1) {
-            this.enterBossSignal();
+            this.enterBossEntry();
             return;
           }
 
@@ -737,14 +786,369 @@ export function PhaserRaidGame({
           this.startWave(this.currentWaveIndex + 1);
         }
 
-        private enterBossSignal() {
-          this.raidStatus = "boss-signal";
-          this.statusText = "Boss signal detected - next phase coming.";
+        private enterBossEntry() {
+          this.raidStatus = "boss-entry";
+          this.statusText = "BLACKOUT CORE DETECTED. Final threat inbound.";
           this.showStateText(
-            "BOSS SIGNAL DETECTED",
-            "The Blackout Core is waking. Next phase coming.",
+            "BLACKOUT CORE DETECTED",
+            "Final boss entering the arena.",
           );
+          this.cameras.main.shake(260, 0.008);
           onUpgradeOffer(null);
+          this.emitHud(true);
+          this.time.delayedCall(1700, () => {
+            if (this.raidStatus === "boss-entry") {
+              this.startBossFight();
+            }
+          });
+        }
+
+        private startBossFight() {
+          this.clearStateOverlay();
+          this.clearProjectiles();
+          this.raidStatus = "boss";
+          this.statusText = "The Blackout Core is online. Phase 1: Detection.";
+          this.bossPhase = 1;
+          this.bossMode = "sniper";
+          this.bossModeHistory = ["sniper"];
+          this.nextBossAttackAt = this.time.now + 750;
+          this.nextBossSummonAt = this.time.now + RAID_BOSS.summonCooldownMs;
+          this.nextBossShockwaveAt = this.time.now + RAID_BOSS.shockwaveCooldownMs;
+          this.bossAttackCounter = 0;
+
+          this.bossAura = this.add.graphics();
+          this.boss = this.add.circle(
+            RAID_GAME_WIDTH / 2,
+            RAID_GAME_HEIGHT / 2,
+            RAID_BOSS.radius,
+            0x4a0808,
+            1,
+          ) as BossSprite;
+          this.boss.setStrokeStyle(5, 0xff5a1f, 0.95);
+          this.boss.hp = RAID_BOSS.maxHp;
+          this.boss.maxHp = RAID_BOSS.maxHp;
+
+          this.physics.add.existing(this.boss);
+          this.boss.body.setCircle(RAID_BOSS.radius);
+          this.boss.body.setAllowGravity(false);
+          this.boss.body.setImmovable(true);
+          this.boss.body.setCollideWorldBounds(true);
+
+          this.physics.add.overlap(
+            this.playerBullets,
+            this.boss,
+            this.handlePlayerBulletBossOverlap,
+            undefined,
+            this,
+          );
+
+          this.showTransientStateText(
+            "PHASE 1: DETECTION",
+            "The Core is reading your movement.",
+            1350,
+          );
+          this.emitHud(true);
+        }
+
+        private updateBoss(time: number) {
+          if (this.raidStatus !== "boss" || !this.boss?.active) {
+            return;
+          }
+
+          this.updateBossVisuals(time);
+          this.updateBossPhase();
+          this.updateBossContact(time);
+
+          if (time >= this.nextBossAttackAt) {
+            this.executeBossAttack(time);
+          }
+
+          if (time >= this.nextBossSummonAt) {
+            this.bossSummonMinions();
+            this.nextBossSummonAt =
+              time + (this.bossPhase === 3 ? 3900 : RAID_BOSS.summonCooldownMs);
+          }
+
+          if (this.bossPhase === 3 && time >= this.nextBossShockwaveAt) {
+            this.startShockwave();
+            this.nextBossShockwaveAt = time + RAID_BOSS.shockwaveCooldownMs;
+          }
+        }
+
+        private updateBossVisuals(time: number) {
+          if (!this.boss || !this.bossAura) {
+            return;
+          }
+
+          const pulse = 1 + Math.sin(time / 145) * 0.055;
+          this.boss.setScale(pulse);
+          this.boss.rotation += 0.012;
+          this.bossAura.clear();
+          this.bossAura.lineStyle(3, 0xff5a1f, 0.22);
+          this.bossAura.strokeCircle(this.boss.x, this.boss.y, RAID_BOSS.radius + 18 + Math.sin(time / 180) * 6);
+          this.bossAura.lineStyle(2, 0xffb347, 0.18);
+          this.bossAura.strokeCircle(this.boss.x, this.boss.y, RAID_BOSS.radius + 34 + Math.cos(time / 220) * 8);
+        }
+
+        private updateBossPhase() {
+          if (!this.boss || !this.bossPhase) {
+            return;
+          }
+
+          const hpRatio = this.boss.hp / this.boss.maxHp;
+
+          if (this.bossPhase === 1 && hpRatio <= 0.7) {
+            this.transitionBossPhase(2, getFallbackBossMode(2));
+          } else if (this.bossPhase === 2 && hpRatio <= 0.35) {
+            this.transitionBossPhase(3, getFallbackBossMode(3));
+          }
+        }
+
+        private transitionBossPhase(phase: 2 | 3, mode: BossMode) {
+          this.bossPhase = phase;
+          this.bossMode = mode;
+          this.bossModeHistory = [...this.bossModeHistory, mode];
+          this.cameras.main.shake(320, 0.01);
+
+          if (phase === 2) {
+            this.statusText = "The Core is adapting to your attack pattern.";
+            this.showTransientStateText(
+              "PHASE 2: ADAPTATION",
+              "The Core is adapting to your attack pattern. Summoner mode activated.",
+              1700,
+            );
+            this.nextBossSummonAt = this.time.now + 1200;
+          } else {
+            this.statusText = "BLACKOUT CORE entered overload. Survive the final surge.";
+            this.showTransientStateText(
+              "PHASE 3: OVERLOAD",
+              "BLACKOUT CORE entered overload. Survive the final surge.",
+              1750,
+            );
+            this.startShockwave();
+            this.nextBossSummonAt = this.time.now + 850;
+          }
+        }
+
+        private executeBossAttack(time: number) {
+          this.bossAttackCounter += 1;
+
+          if (this.bossPhase === 1) {
+            this.bossAimedShot();
+
+            if (this.bossAttackCounter % 5 === 0) {
+              this.bossSummonMinions(1, 0);
+            }
+          } else if (this.bossPhase === 2) {
+            if (this.bossMode === "summoner" && this.bossAttackCounter % 3 === 0) {
+              this.bossSummonMinions(2, 1);
+            } else if (this.bossAttackCounter % 4 === 0) {
+              this.bossRadialBurst(12, RAID_BOSS.radialShotSpeed);
+            } else {
+              this.bossAimedShot(2);
+            }
+          } else {
+            if (this.bossAttackCounter % 2 === 0) {
+              this.bossRadialBurst(18, RAID_BOSS.radialShotSpeed + 35);
+            } else {
+              this.bossAimedShot(3);
+            }
+          }
+
+          this.nextBossAttackAt = time + this.getBossAttackCadence();
+        }
+
+        private getBossAttackCadence(): number {
+          if (this.bossPhase === 3) {
+            return RAID_BOSS.phaseThreeAttackMs;
+          }
+
+          if (this.bossPhase === 2) {
+            return RAID_BOSS.phaseTwoAttackMs;
+          }
+
+          return RAID_BOSS.phaseOneAttackMs;
+        }
+
+        private bossAimedShot(count = 1) {
+          if (!this.boss) {
+            return;
+          }
+
+          const baseAngle = PhaserLib.Math.Angle.Between(
+            this.boss.x,
+            this.boss.y,
+            this.player.x,
+            this.player.y,
+          );
+          const spread = count === 1 ? [0] : count === 2 ? [-0.12, 0.12] : [-0.18, 0, 0.18];
+
+          spread.forEach((offset) => {
+            this.spawnBullet({
+              angle: baseAngle + offset,
+              damage: RAID_BOSS.aimedShotDamage,
+              owner: "boss",
+              pierceRemaining: 0,
+              speed: RAID_BOSS.aimedShotSpeed,
+              x: this.boss!.x + Math.cos(baseAngle + offset) * (RAID_BOSS.radius + 12),
+              y: this.boss!.y + Math.sin(baseAngle + offset) * (RAID_BOSS.radius + 12),
+            });
+          });
+        }
+
+        private bossRadialBurst(count = 14, speed = RAID_BOSS.radialShotSpeed) {
+          if (!this.boss) {
+            return;
+          }
+
+          this.cameras.main.shake(100, 0.004);
+
+          for (let index = 0; index < count; index += 1) {
+            const angle = (Math.PI * 2 * index) / count + this.bossAttackCounter * 0.08;
+
+            this.spawnBullet({
+              angle,
+              damage: RAID_BOSS.radialShotDamage,
+              owner: "boss",
+              pierceRemaining: 0,
+              speed,
+              x: this.boss.x + Math.cos(angle) * (RAID_BOSS.radius + 8),
+              y: this.boss.y + Math.sin(angle) * (RAID_BOSS.radius + 8),
+            });
+          }
+        }
+
+        private bossSummonMinions(crawlers = 2, drones = 0) {
+          for (let index = 0; index < crawlers; index += 1) {
+            this.spawnCrawler(this.nextEnemyId + index);
+          }
+
+          for (let index = 0; index < drones; index += 1) {
+            this.spawnDrone(this.nextEnemyId + index + 19);
+          }
+
+          this.statusText =
+            this.bossPhase === 3
+              ? "Overload surge: more hostiles entering the arena."
+              : "The Core is summoning corrupted defenders.";
+          this.emitHud(true);
+        }
+
+        private startShockwave() {
+          if (!this.boss) {
+            return;
+          }
+
+          const ring = this.add.graphics();
+          this.activeShockwave = {
+            damagedPlayer: false,
+            durationMs: 1200,
+            maxRadius: 310,
+            ring,
+            startedAt: this.time.now,
+          };
+          this.statusText = "Shockwave warning: move away from the Core.";
+        }
+
+        private updateShockwave(time: number) {
+          if (!this.activeShockwave || !this.boss?.active) {
+            return;
+          }
+
+          const progress = Math.min(
+            1,
+            (time - this.activeShockwave.startedAt) / this.activeShockwave.durationMs,
+          );
+          const radius = RAID_BOSS.radius + progress * this.activeShockwave.maxRadius;
+
+          this.activeShockwave.ring.clear();
+          this.activeShockwave.ring.lineStyle(5, 0xffb347, 0.75 - progress * 0.45);
+          this.activeShockwave.ring.strokeCircle(this.boss.x, this.boss.y, radius);
+          this.activeShockwave.ring.lineStyle(1, 0xff2d1f, 0.5);
+          this.activeShockwave.ring.strokeCircle(this.boss.x, this.boss.y, Math.max(0, radius - 22));
+
+          const playerDistance = PhaserLib.Math.Distance.Between(
+            this.boss.x,
+            this.boss.y,
+            this.player.x,
+            this.player.y,
+          );
+
+          if (
+            !this.activeShockwave.damagedPlayer &&
+            playerDistance <= radius &&
+            playerDistance >= radius - 38
+          ) {
+            this.activeShockwave.damagedPlayer = true;
+            this.damagePlayer(RAID_BOSS.shockwaveDamage);
+          }
+
+          if (progress >= 1) {
+            this.activeShockwave.ring.destroy();
+            this.activeShockwave = null;
+          }
+        }
+
+        private updateBossContact(time: number) {
+          if (!this.boss?.active) {
+            return;
+          }
+
+          const distance = PhaserLib.Math.Distance.Between(
+            this.boss.x,
+            this.boss.y,
+            this.player.x,
+            this.player.y,
+          );
+
+          if (
+            distance <= RAID_BOSS.radius + RAID_PLAYER.radius &&
+            time - this.lastBossContactDamageAt >= RAID_BOSS.contactCooldownMs
+          ) {
+            this.lastBossContactDamageAt = time;
+            this.damagePlayer(RAID_BOSS.contactDamage);
+          }
+        }
+
+        private handlePlayerBulletBossOverlap(
+          bulletObject: unknown,
+          bossObject: unknown,
+        ) {
+          const bullet = bulletObject as BulletSprite;
+          const boss = bossObject as BossSprite;
+
+          if (!bullet.active || !boss.active || this.raidStatus !== "boss") {
+            return;
+          }
+
+          boss.hp = Math.max(0, boss.hp - bullet.damage);
+          bullet.destroy();
+
+          if (boss.hp <= 0) {
+            this.defeatBoss();
+          } else {
+            this.emitHud(true);
+          }
+        }
+
+        private defeatBoss() {
+          if (!this.boss) {
+            return;
+          }
+
+          this.raidStatus = "victory";
+          this.statusText = "Core destroyed. Raid complete.";
+          this.score += 2500;
+          this.boss.destroy();
+          this.boss = undefined;
+          this.bossAura?.destroy();
+          this.bossAura = undefined;
+          this.enemies.clear(true, true);
+          this.clearProjectiles();
+          this.activeShockwave?.ring.destroy();
+          this.activeShockwave = null;
+          this.cameras.main.shake(420, 0.012);
+          this.showStateText("CORE DESTROYED", "Victory. Press R or use Restart Raid.");
           this.emitHud(true);
         }
 
@@ -754,7 +1158,10 @@ export function PhaserRaidGame({
           this.player.body.setVelocity(0, 0);
           this.player.setFillStyle(0x3b0b0b, 1);
           this.player.setStrokeStyle(3, 0xff5a1f, 0.95);
+          this.bossAura?.clear();
           this.clearProjectiles();
+          this.activeShockwave?.ring.destroy();
+          this.activeShockwave = null;
           this.showStateText("OPERATOR DOWN", "Press R or use Restart Raid.");
           onUpgradeOffer(null);
           this.emitHud(true);
@@ -803,6 +1210,19 @@ export function PhaserRaidGame({
           this.stateOverlayObjects = [panel, titleText, subtitleText];
         }
 
+        private showTransientStateText(
+          title: string,
+          subtitle: string,
+          durationMs: number,
+        ) {
+          this.showStateText(title, subtitle);
+          this.time.delayedCall(durationMs, () => {
+            if (this.raidStatus === "boss") {
+              this.clearStateOverlay();
+            }
+          });
+        }
+
         private clearStateOverlay() {
           this.stateOverlayObjects.forEach((gameObject) => gameObject.destroy());
           this.stateOverlayObjects = [];
@@ -823,6 +1243,7 @@ export function PhaserRaidGame({
             ),
             dashReady: time - this.lastDashAt >= this.dashCooldownMs,
             enemiesAlive: this.enemies?.countActive(true) ?? 0,
+            damageTaken: this.damageTaken,
             hp: this.hp,
             kills: this.kills,
             maxHp: this.maxHp,
@@ -832,6 +1253,11 @@ export function PhaserRaidGame({
             statusText: this.statusText,
             totalWaves: RAID_WAVES.length,
             wave: RAID_WAVES[this.currentWaveIndex]?.wave ?? RAID_WAVES.length,
+            bossHp: this.boss?.hp ?? 0,
+            bossMaxHp: RAID_BOSS.maxHp,
+            bossPhase: this.bossPhase,
+            bossMode: this.bossMode,
+            bossModeHistory: this.bossModeHistory,
           });
         }
       }

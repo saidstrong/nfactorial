@@ -1,8 +1,18 @@
 export type RaidStatus =
   | "running"
   | "upgrade"
-  | "boss-signal"
+  | "boss-entry"
+  | "boss"
+  | "victory"
   | "operator-down";
+
+export type BossMode =
+  | "hunter"
+  | "sniper"
+  | "summoner"
+  | "bullet_hell"
+  | "shield_core"
+  | "berserker";
 
 export type UpgradeId =
   | "overclocked-barrel"
@@ -23,6 +33,7 @@ export type RaidHudState = {
   maxHp: number;
   score: number;
   kills: number;
+  damageTaken: number;
   enemiesAlive: number;
   wave: number;
   totalWaves: number;
@@ -31,6 +42,11 @@ export type RaidHudState = {
   dashReady: boolean;
   dashCooldownRemainingMs: number;
   selectedUpgrades: UpgradeOption[];
+  bossHp: number;
+  bossMaxHp: number;
+  bossPhase: number | null;
+  bossMode: BossMode | null;
+  bossModeHistory: BossMode[];
 };
 
 export type EnemyKind = "crawler" | "drone";

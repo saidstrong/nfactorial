@@ -46,6 +46,24 @@ export const RAID_DRONE = {
   scoreValue: 190,
 };
 
+export const RAID_BOSS = {
+  name: "The Blackout Core",
+  radius: 46,
+  maxHp: 1500,
+  contactDamage: 18,
+  contactCooldownMs: 900,
+  aimedShotDamage: 14,
+  radialShotDamage: 12,
+  shockwaveDamage: 18,
+  aimedShotSpeed: 255,
+  radialShotSpeed: 215,
+  phaseOneAttackMs: 1050,
+  phaseTwoAttackMs: 820,
+  phaseThreeAttackMs: 610,
+  summonCooldownMs: 5200,
+  shockwaveCooldownMs: 7000,
+};
+
 export const RAID_WAVES = [
   { wave: 1, crawlers: 8, drones: 0 },
   { wave: 2, crawlers: 8, drones: 4 },
@@ -57,6 +75,7 @@ export const INITIAL_RAID_HUD = {
   maxHp: RAID_PLAYER.maxHp,
   score: 0,
   kills: 0,
+  damageTaken: 0,
   enemiesAlive: 0,
   wave: 1,
   totalWaves: RAID_WAVES.length,
@@ -65,4 +84,9 @@ export const INITIAL_RAID_HUD = {
   dashReady: true,
   dashCooldownRemainingMs: 0,
   selectedUpgrades: [],
+  bossHp: 0,
+  bossMaxHp: RAID_BOSS.maxHp,
+  bossPhase: null,
+  bossMode: null,
+  bossModeHistory: [],
 };
