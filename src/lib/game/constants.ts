@@ -19,6 +19,13 @@ export const RAID_BULLET = {
   lifetimeMs: 900,
 };
 
+export const RAID_ENEMY_BULLET = {
+  radius: 6,
+  speed: 235,
+  damage: 12,
+  lifetimeMs: 1650,
+};
+
 export const RAID_CRAWLER = {
   radius: 14,
   hp: 36,
@@ -26,9 +33,24 @@ export const RAID_CRAWLER = {
   damage: 10,
   contactCooldownMs: 650,
   scoreValue: 120,
-  spawnEveryMs: 1150,
-  maxAlive: 14,
 };
+
+export const RAID_DRONE = {
+  radius: 16,
+  hp: 54,
+  speed: 82,
+  damage: RAID_ENEMY_BULLET.damage,
+  preferredDistance: 240,
+  retreatDistance: 160,
+  fireRateMs: 1450,
+  scoreValue: 190,
+};
+
+export const RAID_WAVES = [
+  { wave: 1, crawlers: 8, drones: 0 },
+  { wave: 2, crawlers: 8, drones: 4 },
+  { wave: 3, crawlers: 10, drones: 6 },
+] as const;
 
 export const INITIAL_RAID_HUD = {
   hp: RAID_PLAYER.maxHp,
@@ -36,6 +58,11 @@ export const INITIAL_RAID_HUD = {
   score: 0,
   kills: 0,
   enemiesAlive: 0,
+  wave: 1,
+  totalWaves: RAID_WAVES.length,
+  statusText: "Wave 1 breach active.",
   status: "running" as const,
   dashReady: true,
+  dashCooldownRemainingMs: 0,
+  selectedUpgrades: [],
 };
