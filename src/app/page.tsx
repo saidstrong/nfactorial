@@ -21,8 +21,8 @@ const pillars = [
   },
   {
     icon: Layers3,
-    title: "Enemy Waves",
-    body: "Survive three escalating breach waves before the arena hands you over to the Blackout Core.",
+    title: "Chamber Route",
+    body: "Clear linked chambers, cross live portals, and push deeper until the corrupted boss chamber opens.",
   },
   {
     icon: Zap,
@@ -55,7 +55,7 @@ const loopSteps = [
   {
     icon: ShieldAlert,
     title: "Finish",
-    body: "Read the AI Director, react to Wave 3 crisis conditions, then destroy the adaptive Blackout Core.",
+    body: "Read the AI Director, react to the Surge Chamber crisis, then destroy the adaptive Blackout Core.",
   },
 ] as const;
 
@@ -108,11 +108,11 @@ export default function Home() {
               Survive the AI-directed dungeon.
             </p>
             <p className="mt-5 max-w-3xl text-base leading-8 text-cyan-100/72 sm:text-lg">
-              BLACKOUT RAID is a browser-based cyber arena shooter where players
-              survive enemy waves, choose focused upgrades, and fight an adaptive
-              final boss under AI direction. The current build is a fast,
-              playable vertical slice built for examiners to understand in
-              seconds.
+              BLACKOUT RAID is a browser-based cyber dungeon raid where players
+              breach linked chambers, draft weapons and rewards between portals,
+              and fight an adaptive final boss under AI direction. The current
+              build is a compact vertical slice built to read clearly for
+              examiners within seconds.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -159,7 +159,7 @@ export default function Home() {
               <div className="absolute inset-0 bg-[linear-gradient(rgba(88,243,255,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(88,243,255,0.06)_1px,transparent_1px)] bg-[size:42px_42px]" />
               <div className="absolute inset-6 border border-cyan-300/10" />
               <div className="absolute inset-x-6 top-6 flex items-center justify-between">
-                <div className="status-chip text-cyan-100/82">Wave 3 breach</div>
+                <div className="status-chip text-cyan-100/82">Surge Chamber</div>
                 <div className="status-chip border-orange-300/25 bg-orange-400/10 text-orange-100">
                   Core detected
                 </div>
@@ -205,8 +205,8 @@ export default function Home() {
               <div className="absolute inset-x-5 bottom-5 grid gap-3">
                 <div className="panel grid grid-cols-3 gap-3 px-4 py-3">
                   <SnapshotMetric label="HP" value="104 / 110" />
-                  <SnapshotMetric label="Wave" value="3 / 3" />
-                  <SnapshotMetric label="Dash" value="0.8s" />
+                  <SnapshotMetric label="Room" value="3 / 4" />
+                  <SnapshotMetric label="Weapon" value="Rail Lance" />
                 </div>
                 <div className="panel-warm px-4 py-4">
                   <div className="flex items-center gap-3">
@@ -216,8 +216,9 @@ export default function Home() {
                     </p>
                   </div>
                   <p className="mt-3 text-sm leading-6 text-orange-100/78">
-                    Power Surge detected. Enemy movement accelerated across the
-                    chamber. Proceed before the Blackout Core stabilizes.
+                    Power Surge detected. Hostile movement accelerated inside
+                    the Surge Chamber. Secure the boss portal before the Core
+                    stabilizes.
                   </p>
                 </div>
               </div>
@@ -296,8 +297,8 @@ export default function Home() {
             </h2>
             <p className="mt-3 text-sm leading-7 text-cyan-100/68 sm:text-base">
               The current build is a local, browser-based playable slice. Open
-              the arena, learn the controls, clear the waves, and fight the
-              AI-directed Blackout Core without installing anything.
+              the chamber route, learn the controls, draft rewards, and fight
+              the AI-directed Blackout Core without installing anything.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row">

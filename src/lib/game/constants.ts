@@ -14,8 +14,6 @@ export const RAID_PLAYER = {
 };
 
 export const RAID_BULLET = {
-  radius: 5,
-  speed: 620,
   lifetimeMs: 900,
 };
 
@@ -46,6 +44,17 @@ export const RAID_DRONE = {
   scoreValue: 190,
 };
 
+export const RAID_ELITE_DRONE = {
+  radius: 19,
+  hp: 92,
+  speed: 88,
+  damage: 13,
+  preferredDistance: 275,
+  retreatDistance: 175,
+  fireRateMs: 1050,
+  scoreValue: 360,
+};
+
 export const RAID_BOSS = {
   name: "The Blackout Core",
   radius: 46,
@@ -64,25 +73,25 @@ export const RAID_BOSS = {
   shockwaveCooldownMs: 7600,
 };
 
-export const RAID_WAVES = [
-  { wave: 1, crawlers: 8, drones: 0 },
-  { wave: 2, crawlers: 8, drones: 4 },
-  { wave: 3, crawlers: 10, drones: 6 },
-] as const;
-
 export const INITIAL_RAID_HUD = {
   hp: RAID_PLAYER.maxHp,
   maxHp: RAID_PLAYER.maxHp,
   score: 0,
   kills: 0,
   damageTaken: 0,
+  roomsCleared: 0,
   enemiesAlive: 0,
+  roomName: "Entry Chamber",
+  roomNumber: 1,
+  totalRooms: 4,
   wave: 1,
-  totalWaves: RAID_WAVES.length,
-  statusText: "Wave 1 breach active.",
+  totalWaves: 4,
+  statusText: "Entry Chamber breach active.",
   status: "running" as const,
   dashReady: true,
   dashCooldownRemainingMs: 0,
+  currentWeaponId: "pulse-rifle" as const,
+  currentWeaponName: "Pulse Rifle",
   selectedUpgrades: [],
   bossHp: 0,
   bossMaxHp: RAID_BOSS.maxHp,

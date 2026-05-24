@@ -7,11 +7,11 @@ import {
   RAID_BULLET,
   RAID_CRAWLER,
   RAID_DRONE,
+  RAID_ELITE_DRONE,
   RAID_ENEMY_BULLET,
   RAID_GAME_HEIGHT,
   RAID_GAME_WIDTH,
   RAID_PLAYER,
-  RAID_WAVES,
 } from "@/lib/game/constants";
 import { getFallbackBossMode } from "@/lib/game/bossModes";
 import type {
@@ -23,16 +23,21 @@ import type {
   BossPhaseSelection,
   RaidEndReport,
 } from "@/lib/ai/fallbacks";
+import { RAID_ROOMS } from "@/lib/game/rooms";
+import { getRewardOffers } from "@/lib/game/rewards";
 import type {
   BossMode,
   EnemyKind,
   RaidHudState,
+  RaidRoomDefinition,
   RaidStatus,
+  RewardSelection,
   UpgradeId,
   UpgradeOption,
-  UpgradeSelection,
+  WeaponDefinition,
 } from "@/lib/game/types";
-import { getUpgradeById, getUpgradeOffers } from "@/lib/game/upgrades";
+import { getUpgradeById } from "@/lib/game/upgrades";
+import { getWeaponById } from "@/lib/game/weapons";
 
 type PhaserRuntime = typeof import("phaser");
 type ArcadeBody = import("phaser").Physics.Arcade.Body;
@@ -41,21 +46,26 @@ type GameObject = import("phaser").GameObjects.GameObject;
 type Graphics = import("phaser").GameObjects.Graphics;
 type KeyboardKey = import("phaser").Input.Keyboard.Key;
 type ShadowEllipse = import("phaser").GameObjects.Ellipse;
+type GameText = import("phaser").GameObjects.Text;
 type PhysicsArc = import("phaser").GameObjects.Arc & { body: ArcadeBody };
 type PhysicsRectangle = import("phaser").GameObjects.Rectangle & {
   body: ArcadeBody;
 };
-type PhysicsEnemy = (PhysicsArc | PhysicsRectangle) & { body: ArcadeBody };
+type PhysicsBodyShape = PhysicsArc | PhysicsRectangle;
+type PhysicsEnemy = PhysicsBodyShape & { body: ArcadeBody };
 
 type BulletOwner = "player" | "enemy" | "boss";
+type PortalKind = "normal" | "boss";
 
-type BulletSprite = PhysicsArc & {
+type BulletSprite = PhysicsBodyShape & {
   bornAt: number;
+  bulletShape: "orb" | "rail";
   damage: number;
+  hitEnemyIds: Set<number>;
   owner: BulletOwner;
   pierceRemaining: number;
-  hitEnemyIds: Set<number>;
   trailColor: number;
+  trailLength: number;
 };
 
 type EnemySprite = PhysicsEnemy & {
@@ -76,18 +86,26 @@ type BossSprite = PhysicsArc & {
   shadow?: ShadowEllipse;
 };
 
+type PortalSprite = PhysicsArc & {
+  activatedAt: number;
+  aura?: Graphics;
+  kind: PortalKind;
+  label?: GameText;
+  shadow?: ShadowEllipse;
+};
+
 type ShockwaveState = {
   damagedPlayer: boolean;
+  durationMs: number;
   maxRadius: number;
   ring: Graphics;
   startedAt: number;
-  durationMs: number;
 };
 
 type SceneControls = {
   applyAiEvent: (directive: AiEventDirective) => void;
   applyBossPhaseDirective: (selection: BossPhaseSelection) => void;
-  applyUpgrade: (upgradeId: UpgradeId) => void;
+  applyRewardSelection: (selection: RewardSelection) => void;
 };
 
 type PhaserRaidGameProps = {
@@ -97,8 +115,72 @@ type PhaserRaidGameProps = {
   onBossPhaseRequest: (phase: 2 | 3, request: BossPhaseRequest) => void;
   onHudChange: (hud: RaidHudState) => void;
   onRaidEnd: (report: RaidEndReport) => void;
-  onUpgradeOffer: (upgrades: UpgradeOption[] | null) => void;
-  upgradeSelection: UpgradeSelection | null;
+  onRewardOffer: (
+    rewards: ReturnType<typeof getRewardOffers> | null,
+  ) => void;
+  rewardSelection: RewardSelection | null;
+};
+
+const ROOM_SPAWN_POINTS: Record<
+  RaidRoomDefinition["id"],
+  ReadonlyArray<{ x: number; y: number }>
+> = {
+  "entry-chamber": [
+    { x: 118, y: 92 },
+    { x: 286, y: 82 },
+    { x: 478, y: 80 },
+    { x: 670, y: 82 },
+    { x: 842, y: 94 },
+    { x: 876, y: 234 },
+    { x: 864, y: 414 },
+    { x: 96, y: 442 },
+    { x: 142, y: 528 },
+    { x: 786, y: 520 },
+  ],
+  "drone-chamber": [
+    { x: 128, y: 90 },
+    { x: 302, y: 88 },
+    { x: 476, y: 86 },
+    { x: 650, y: 88 },
+    { x: 826, y: 90 },
+    { x: 868, y: 210 },
+    { x: 862, y: 334 },
+    { x: 846, y: 470 },
+    { x: 116, y: 490 },
+    { x: 128, y: 188 },
+    { x: 476, y: 534 },
+    { x: 702, y: 526 },
+  ],
+  "surge-chamber": [
+    { x: 110, y: 88 },
+    { x: 242, y: 86 },
+    { x: 376, y: 88 },
+    { x: 510, y: 86 },
+    { x: 646, y: 88 },
+    { x: 780, y: 86 },
+    { x: 878, y: 124 },
+    { x: 886, y: 252 },
+    { x: 886, y: 382 },
+    { x: 846, y: 516 },
+    { x: 682, y: 528 },
+    { x: 506, y: 532 },
+    { x: 332, y: 530 },
+    { x: 168, y: 522 },
+    { x: 86, y: 382 },
+    { x: 82, y: 242 },
+  ],
+  "boss-chamber": [
+    { x: 120, y: 98 },
+    { x: 260, y: 86 },
+    { x: 700, y: 86 },
+    { x: 842, y: 98 },
+    { x: 880, y: 216 },
+    { x: 884, y: 406 },
+    { x: 840, y: 526 },
+    { x: 122, y: 528 },
+    { x: 88, y: 398 },
+    { x: 88, y: 214 },
+  ],
 };
 
 export function PhaserRaidGame({
@@ -108,18 +190,18 @@ export function PhaserRaidGame({
   onBossPhaseRequest,
   onHudChange,
   onRaidEnd,
-  onUpgradeOffer,
-  upgradeSelection,
+  onRewardOffer,
+  rewardSelection,
 }: PhaserRaidGameProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<import("phaser").Game | null>(null);
   const sceneControlsRef = useRef<SceneControls | null>(null);
 
   useEffect(() => {
-    if (upgradeSelection) {
-      sceneControlsRef.current?.applyUpgrade(upgradeSelection.id);
+    if (rewardSelection) {
+      sceneControlsRef.current?.applyRewardSelection(rewardSelection);
     }
-  }, [upgradeSelection]);
+  }, [rewardSelection]);
 
   useEffect(() => {
     if (aiEventSelection) {
@@ -155,8 +237,13 @@ export function PhaserRaidGame({
         private playerBullets!: ArcadeGroup;
         private enemyBullets!: ArcadeGroup;
         private enemies!: ArcadeGroup;
+        private roomBackdrop!: Graphics;
+        private roomGrid!: Graphics;
+        private roomAccents!: Graphics;
+        private roomPulse!: Graphics;
         private boss?: BossSprite;
         private bossAura?: Graphics;
+        private activePortal?: PortalSprite;
         private lowVisibilityOverlay?: Graphics;
         private pulseLayer?: Graphics;
         private trailLayer!: Graphics;
@@ -164,6 +251,8 @@ export function PhaserRaidGame({
         private stateOverlayObjects: GameObject[] = [];
         private activeShockwave: ShockwaveState | null = null;
         private keys!: Record<"W" | "A" | "S" | "D" | "SPACE" | "R", KeyboardKey>;
+        private overlaySequence = 0;
+        private portalEnterLocked = false;
         private hp = RAID_PLAYER.maxHp;
         private maxHp = RAID_PLAYER.maxHp;
         private score = 0;
@@ -173,23 +262,23 @@ export function PhaserRaidGame({
         private shotsFired = 0;
         private shotsHit = 0;
         private roomsCleared = 0;
-        private fireRateMs = RAID_PLAYER.fireRateMs;
-        private dashCooldownMs = RAID_PLAYER.dashCooldownMs;
-        private bulletDamage = RAID_PLAYER.bulletDamage;
-        private bulletPierce = 0;
+        private currentWeapon: WeaponDefinition = getWeaponById("pulse-rifle");
+        private fireRateMultiplier = 1;
+        private dashCooldownMultiplier = 1;
+        private bulletPierceBonus = 0;
         private critChance = 0;
-        private waveEventModifier: AiEventModifier | null = null;
-        private waveEnemySpeedMultiplier = 1;
-        private waveBulletDamageMultiplier = 1;
-        private waveDashCooldownMultiplier = 1;
+        private roomEventModifier: AiEventModifier | null = null;
+        private roomEnemySpeedMultiplier = 1;
+        private roomBulletDamageMultiplier = 1;
+        private roomDashCooldownMultiplier = 1;
         private lastShotAt = 0;
         private lastDashAt = -RAID_PLAYER.dashCooldownMs;
         private dashUntil = 0;
         private lastContactDamageAt = 0;
         private lastHudAt = 0;
-        private raidStatus: RaidStatus = "running";
-        private statusText = "Wave 1 breach active.";
-        private currentWaveIndex = 0;
+        private raidStatus: RaidStatus = "room-intro";
+        private statusText = "Entry Chamber breach active.";
+        private currentRoomIndex = 0;
         private selectedUpgrades: UpgradeOption[] = [];
         private nextEnemyId = 1;
         private bossPhase: 1 | 2 | 3 | null = null;
@@ -202,6 +291,8 @@ export function PhaserRaidGame({
         private bossFightStartedAt = 0;
         private lastBossContactDamageAt = 0;
         private raidEndReported = false;
+        private surgeEventTriggered = false;
+        private rewardPresentedForRoom = -1;
 
         constructor() {
           super("raid-arena");
@@ -247,10 +338,11 @@ export function PhaserRaidGame({
             applyAiEvent: (directive) => this.applyAiEvent(directive),
             applyBossPhaseDirective: (selection) =>
               this.applyBossPhaseDirective(selection),
-            applyUpgrade: (upgradeId) => this.applyUpgrade(upgradeId),
+            applyRewardSelection: (selection) =>
+              this.applyRewardSelection(selection),
           };
 
-          this.startWave(0);
+          this.enterRoomIntro(0);
         }
 
         update(time: number) {
@@ -259,14 +351,23 @@ export function PhaserRaidGame({
               this.scene.restart();
             }
 
+            this.syncVisualEffects();
+            this.renderProjectileTrails();
+            this.renderRoomOverlay();
+            this.renderPortalPulse(time);
+            this.emitHud();
             return;
           }
 
           if (
-            this.raidStatus === "boss-entry" ||
-            this.raidStatus === "upgrade" ||
-            this.raidStatus === "ai-event"
+            this.raidStatus === "room-intro" ||
+            this.raidStatus === "reward" ||
+            this.raidStatus === "ai-event" ||
+            this.raidStatus === "boss-entry"
           ) {
+            this.syncVisualEffects();
+            this.renderRoomOverlay();
+            this.renderPortalPulse(time);
             this.emitHud();
             return;
           }
@@ -281,10 +382,11 @@ export function PhaserRaidGame({
           this.updateEnemyBullets(time);
           this.syncVisualEffects();
           this.renderProjectileTrails();
-          this.renderWaveOverlay();
+          this.renderRoomOverlay();
+          this.renderPortalPulse(time);
 
           if (this.raidStatus === "running") {
-            this.checkWaveClear();
+            this.checkRoomClear();
           }
 
           this.emitHud();
@@ -300,27 +402,28 @@ export function PhaserRaidGame({
           this.shotsFired = 0;
           this.shotsHit = 0;
           this.roomsCleared = 0;
-          this.fireRateMs = RAID_PLAYER.fireRateMs;
-          this.dashCooldownMs = RAID_PLAYER.dashCooldownMs;
-          this.bulletDamage = RAID_PLAYER.bulletDamage;
-          this.bulletPierce = 0;
+          this.currentWeapon = getWeaponById("pulse-rifle");
+          this.fireRateMultiplier = 1;
+          this.dashCooldownMultiplier = 1;
+          this.bulletPierceBonus = 0;
           this.critChance = 0;
-          this.waveEventModifier = null;
-          this.waveEnemySpeedMultiplier = 1;
-          this.waveBulletDamageMultiplier = 1;
-          this.waveDashCooldownMultiplier = 1;
+          this.roomEventModifier = null;
+          this.roomEnemySpeedMultiplier = 1;
+          this.roomBulletDamageMultiplier = 1;
+          this.roomDashCooldownMultiplier = 1;
           this.lastShotAt = 0;
           this.lastDashAt = -RAID_PLAYER.dashCooldownMs;
           this.dashUntil = 0;
           this.lastContactDamageAt = 0;
           this.lastHudAt = 0;
-          this.raidStatus = "running";
-          this.statusText = "Wave 1 breach active.";
-          this.currentWaveIndex = 0;
+          this.raidStatus = "room-intro";
+          this.statusText = "Entry Chamber breach active.";
+          this.currentRoomIndex = 0;
           this.selectedUpgrades = [];
           this.nextEnemyId = 1;
           this.boss = undefined;
           this.bossAura = undefined;
+          this.activePortal = undefined;
           this.activeShockwave = null;
           this.bossPhase = null;
           this.bossMode = null;
@@ -332,84 +435,44 @@ export function PhaserRaidGame({
           this.bossFightStartedAt = 0;
           this.lastBossContactDamageAt = 0;
           this.raidEndReported = false;
-          onUpgradeOffer(null);
+          this.surgeEventTriggered = false;
+          this.rewardPresentedForRoom = -1;
+          this.portalEnterLocked = false;
+          this.overlaySequence = 0;
+          onRewardOffer(null);
         }
 
         private createArena() {
           this.cameras.main.setBackgroundColor("#02060b");
-
-          const grid = this.add.graphics();
-          grid.lineStyle(1, 0x123743, 0.38);
-
-          for (let x = RAID_ARENA_PADDING; x <= RAID_GAME_WIDTH; x += 48) {
-            grid.lineBetween(x, RAID_ARENA_PADDING, x, RAID_GAME_HEIGHT - RAID_ARENA_PADDING);
-          }
-
-          for (let y = RAID_ARENA_PADDING; y <= RAID_GAME_HEIGHT; y += 48) {
-            grid.lineBetween(RAID_ARENA_PADDING, y, RAID_GAME_WIDTH - RAID_ARENA_PADDING, y);
-          }
-
-          grid.lineStyle(3, 0x2afcdb, 0.55);
-          grid.strokeRect(
-            RAID_ARENA_PADDING,
-            RAID_ARENA_PADDING,
-            RAID_GAME_WIDTH - RAID_ARENA_PADDING * 2,
-            RAID_GAME_HEIGHT - RAID_ARENA_PADDING * 2,
-          );
-
-          this.add.rectangle(
-            RAID_GAME_WIDTH / 2,
-            RAID_GAME_HEIGHT / 2,
-            RAID_GAME_WIDTH - RAID_ARENA_PADDING * 4,
-            RAID_GAME_HEIGHT - RAID_ARENA_PADDING * 4,
-            0x06111a,
-            0.28,
-          );
-
-          const accents = this.add.graphics();
-          accents.lineStyle(2, 0x1d5567, 0.2);
-          accents.strokeCircle(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2, 118);
-          accents.strokeCircle(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2, 220);
-          accents.lineBetween(180, 120, 300, 240);
-          accents.lineBetween(780, 120, 660, 240);
-          accents.lineBetween(180, 500, 300, 380);
-          accents.lineBetween(780, 500, 660, 380);
-          accents.fillStyle(0x58f3ff, 0.18);
-          [
-            [162, 104],
-            [798, 104],
-            [162, 516],
-            [798, 516],
-            [RAID_GAME_WIDTH / 2, 120],
-            [RAID_GAME_WIDTH / 2, 500],
-          ].forEach(([x, y]) => {
-            accents.fillCircle(x, y, 4);
-            accents.fillCircle(x, y, 10);
-          });
-
+          this.roomBackdrop = this.add.graphics();
+          this.roomGrid = this.add.graphics();
+          this.roomAccents = this.add.graphics();
+          this.roomPulse = this.add.graphics();
           this.trailLayer = this.add.graphics();
           this.trailLayer.setDepth(2);
           this.aimLine = this.add.graphics();
-          this.aimLine.setDepth(6);
+          this.aimLine.setDepth(7);
           this.pulseLayer = this.add.graphics();
           this.pulseLayer.setDepth(8);
           this.lowVisibilityOverlay = this.add.graphics();
           this.lowVisibilityOverlay.setDepth(20);
+
+          this.drawRoomTheme(RAID_ROOMS[0]);
         }
 
         private createPlayer() {
           this.playerShadow = this.add.ellipse(
             RAID_GAME_WIDTH / 2,
-            RAID_GAME_HEIGHT / 2 + 15,
-            34,
+            RAID_GAME_HEIGHT - 106,
+            36,
             16,
             0x000000,
-            0.3,
+            0.32,
           );
           this.playerShadow.setDepth(3);
           this.player = this.add.circle(
             RAID_GAME_WIDTH / 2,
-            RAID_GAME_HEIGHT / 2,
+            RAID_GAME_HEIGHT - 122,
             RAID_PLAYER.radius,
             0x2afcdb,
             1,
@@ -424,119 +487,465 @@ export function PhaserRaidGame({
           this.player.body.setMaxVelocity(RAID_PLAYER.dashSpeed);
         }
 
-        private syncVisualEffects() {
-          this.playerShadow.setPosition(this.player.x, this.player.y + 15);
-          this.playerShadow.setScale(this.time.now < this.dashUntil ? 0.78 : 1);
-
-          this.enemies.getChildren().forEach((enemyObject: GameObject) => {
-            const enemy = enemyObject as EnemySprite;
-
-            if (!enemy.active || !enemy.shadow) {
-              return;
-            }
-
-            enemy.shadow.setPosition(enemy.x, enemy.y + 14);
-          });
-
-          if (this.boss?.active && this.boss.shadow) {
-            this.boss.shadow.setPosition(this.boss.x, this.boss.y + 22);
-          }
+        private getCurrentRoom() {
+          return RAID_ROOMS[this.currentRoomIndex] ?? RAID_ROOMS[RAID_ROOMS.length - 1];
         }
 
-        private renderProjectileTrails() {
-          this.trailLayer.clear();
-
-          const drawTrail = (bullet: BulletSprite) => {
-            if (!bullet.active) {
-              return;
-            }
-
-            const velocity = bullet.body.velocity;
-            const magnitude = Math.hypot(velocity.x, velocity.y);
-
-            if (magnitude < 1) {
-              return;
-            }
-
-            const trailLength = bullet.owner === "boss" ? 22 : 16;
-            const alpha = bullet.owner === "player" ? 0.34 : 0.28;
-            const directionX = velocity.x / magnitude;
-            const directionY = velocity.y / magnitude;
-
-            this.trailLayer.lineStyle(3, bullet.trailColor, alpha);
-            this.trailLayer.beginPath();
-            this.trailLayer.moveTo(bullet.x, bullet.y);
-            this.trailLayer.lineTo(
-              bullet.x - directionX * trailLength,
-              bullet.y - directionY * trailLength,
-            );
-            this.trailLayer.strokePath();
-          };
-
-          this.playerBullets.getChildren().forEach((bulletObject: GameObject) => {
-            drawTrail(bulletObject as BulletSprite);
-          });
-          this.enemyBullets.getChildren().forEach((bulletObject: GameObject) => {
-            drawTrail(bulletObject as BulletSprite);
-          });
+        private positionPlayerForRoom() {
+          this.player.body.stop();
+          this.player.setPosition(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT - 122);
+          this.player.body.reset(this.player.x, this.player.y);
         }
 
-        private renderWaveOverlay() {
-          if (!this.lowVisibilityOverlay) {
-            return;
-          }
+        private drawRoomTheme(room: RaidRoomDefinition) {
+          const palette =
+            room.theme === "entry"
+              ? {
+                  accent: 0x58f3ff,
+                  background: 0x020710,
+                  border: 0x2afcdb,
+                  fill: 0x06111a,
+                  grid: 0x143848,
+                  hazard: 0x16384a,
+                }
+              : room.theme === "drone"
+                ? {
+                    accent: 0xffb347,
+                    background: 0x09070a,
+                    border: 0xff8d3a,
+                    fill: 0x130d10,
+                    grid: 0x4d2d1c,
+                    hazard: 0x3c1d12,
+                  }
+                : room.theme === "surge"
+                  ? {
+                      accent: 0xff6238,
+                      background: 0x0a0508,
+                      border: 0xff6f4d,
+                      fill: 0x180a10,
+                      grid: 0x572131,
+                      hazard: 0x5a1616,
+                    }
+                  : {
+                      accent: 0xff7848,
+                      background: 0x030203,
+                      border: 0xff5a1f,
+                      fill: 0x120708,
+                      grid: 0x3b1518,
+                      hazard: 0x2a0c0d,
+                    };
 
-          this.lowVisibilityOverlay.clear();
+          this.cameras.main.setBackgroundColor(palette.background);
+          this.roomBackdrop.clear();
+          this.roomGrid.clear();
+          this.roomAccents.clear();
+          this.roomPulse.clear();
 
-          if (
-            this.waveEventModifier !== "LOW_VISIBILITY" ||
-            this.currentWaveIndex !== 2 ||
-            this.raidStatus !== "running"
-          ) {
-            return;
-          }
-
-          this.lowVisibilityOverlay.fillStyle(0x010206, 0.15);
-          this.lowVisibilityOverlay.fillRect(0, 0, RAID_GAME_WIDTH, RAID_GAME_HEIGHT);
-          this.lowVisibilityOverlay.fillStyle(0x010206, 0.18);
-          this.lowVisibilityOverlay.fillCircle(0, 0, 220);
-          this.lowVisibilityOverlay.fillCircle(RAID_GAME_WIDTH, 0, 220);
-          this.lowVisibilityOverlay.fillCircle(0, RAID_GAME_HEIGHT, 220);
-          this.lowVisibilityOverlay.fillCircle(
-            RAID_GAME_WIDTH,
-            RAID_GAME_HEIGHT,
-            220,
-          );
-          this.lowVisibilityOverlay.lineStyle(2, 0x58f3ff, 0.08);
-          this.lowVisibilityOverlay.strokeRect(
+          this.roomBackdrop.fillStyle(palette.fill, 0.92);
+          this.roomBackdrop.fillRect(0, 0, RAID_GAME_WIDTH, RAID_GAME_HEIGHT);
+          this.roomBackdrop.fillStyle(0x000000, room.theme === "boss" ? 0.18 : 0.12);
+          this.roomBackdrop.fillRect(
             RAID_ARENA_PADDING,
             RAID_ARENA_PADDING,
             RAID_GAME_WIDTH - RAID_ARENA_PADDING * 2,
             RAID_GAME_HEIGHT - RAID_ARENA_PADDING * 2,
           );
-        }
 
-        private startWave(waveIndex: number) {
-          this.currentWaveIndex = waveIndex;
-          this.raidStatus = "running";
-          this.statusText = `Wave ${RAID_WAVES[waveIndex].wave} breach active.`;
-          this.clearStateOverlay();
-          this.player.body.enable = true;
-          this.clearEnemyProjectiles();
-
-          const wave = RAID_WAVES[waveIndex];
-          const extraDrones =
-            waveIndex === 2 && this.waveEventModifier === "DRONE_SWARM" ? 2 : 0;
-
-          for (let index = 0; index < wave.crawlers; index += 1) {
-            this.spawnCrawler(index);
+          this.roomGrid.lineStyle(1, palette.grid, 0.42);
+          for (let x = RAID_ARENA_PADDING; x <= RAID_GAME_WIDTH; x += 48) {
+            this.roomGrid.lineBetween(
+              x,
+              RAID_ARENA_PADDING,
+              x,
+              RAID_GAME_HEIGHT - RAID_ARENA_PADDING,
+            );
           }
 
-          for (let index = 0; index < wave.drones + extraDrones; index += 1) {
-            this.spawnDrone(index);
+          for (let y = RAID_ARENA_PADDING; y <= RAID_GAME_HEIGHT; y += 48) {
+            this.roomGrid.lineBetween(
+              RAID_ARENA_PADDING,
+              y,
+              RAID_GAME_WIDTH - RAID_ARENA_PADDING,
+              y,
+            );
+          }
+
+          this.roomGrid.lineStyle(3, palette.border, 0.56);
+          this.roomGrid.strokeRect(
+            RAID_ARENA_PADDING,
+            RAID_ARENA_PADDING,
+            RAID_GAME_WIDTH - RAID_ARENA_PADDING * 2,
+            RAID_GAME_HEIGHT - RAID_ARENA_PADDING * 2,
+          );
+
+          this.roomAccents.lineStyle(2, palette.hazard, 0.3);
+          this.roomAccents.strokeCircle(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2, 120);
+          this.roomAccents.strokeCircle(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2, 220);
+          this.roomAccents.lineBetween(156, 108, 286, 230);
+          this.roomAccents.lineBetween(804, 108, 674, 230);
+          this.roomAccents.lineBetween(156, 510, 286, 390);
+          this.roomAccents.lineBetween(804, 510, 674, 390);
+
+          if (room.theme === "drone") {
+            this.roomAccents.fillStyle(0xffb347, 0.1);
+            this.roomAccents.fillRect(120, 132, 720, 14);
+            this.roomAccents.fillRect(138, 472, 684, 14);
+          } else if (room.theme === "surge") {
+            this.roomAccents.fillStyle(0xff6238, 0.12);
+            this.roomAccents.fillRect(96, 92, 768, 10);
+            this.roomAccents.fillRect(96, 518, 768, 10);
+            this.roomAccents.lineStyle(3, 0xff7848, 0.18);
+            this.roomAccents.strokeCircle(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2, 86);
+          } else if (room.theme === "boss") {
+            this.roomAccents.fillStyle(0x220607, 0.54);
+            this.roomAccents.fillCircle(
+              RAID_GAME_WIDTH / 2,
+              RAID_GAME_HEIGHT / 2,
+              132,
+            );
+            this.roomAccents.lineStyle(4, 0xff5a1f, 0.18);
+            this.roomAccents.strokeCircle(
+              RAID_GAME_WIDTH / 2,
+              RAID_GAME_HEIGHT / 2,
+              154,
+            );
+            this.roomAccents.lineStyle(2, 0xffb347, 0.16);
+            this.roomAccents.strokeCircle(
+              RAID_GAME_WIDTH / 2,
+              RAID_GAME_HEIGHT / 2,
+              210,
+            );
+          }
+
+          const nodes =
+            room.theme === "boss"
+              ? [
+                  [112, 108],
+                  [848, 108],
+                  [112, 512],
+                  [848, 512],
+                  [RAID_GAME_WIDTH / 2, 88],
+                  [RAID_GAME_WIDTH / 2, 532],
+                ]
+              : [
+                  [152, 104],
+                  [808, 104],
+                  [152, 516],
+                  [808, 516],
+                  [RAID_GAME_WIDTH / 2, 120],
+                  [RAID_GAME_WIDTH / 2, 500],
+                ];
+
+          this.roomAccents.fillStyle(palette.accent, 0.18);
+          nodes.forEach(([x, y]) => {
+            this.roomAccents.fillCircle(x, y, 4);
+            this.roomAccents.fillCircle(x, y, room.theme === "boss" ? 14 : 10);
+          });
+        }
+
+        private enterRoomIntro(roomIndex: number) {
+          const room = RAID_ROOMS[roomIndex];
+
+          this.currentRoomIndex = roomIndex;
+          this.raidStatus = "room-intro";
+          this.statusText = `Entering ${room.name}.`;
+          this.portalEnterLocked = false;
+          this.clearRoomCombat();
+          this.clearPortal();
+          this.clearStateOverlay();
+          this.clearRoomEventModifiers(room.id === "surge-chamber");
+          this.drawRoomTheme(room);
+          this.positionPlayerForRoom();
+          this.player.body.enable = true;
+
+          this.showStateText(room.introTitle, room.introText);
+          this.cameras.main.flash(
+            140,
+            room.theme === "boss" ? 255 : 88,
+            room.theme === "boss" ? 120 : 243,
+            room.theme === "boss" ? 72 : 255,
+            false,
+          );
+          this.emitHud(true);
+
+          this.time.delayedCall(1200, () => {
+            if (this.currentRoomIndex !== roomIndex || this.raidStatus !== "room-intro") {
+              return;
+            }
+
+            if (room.id === "boss-chamber") {
+              this.enterBossEntry();
+              return;
+            }
+
+            if (room.id === "surge-chamber" && !this.surgeEventTriggered) {
+              this.enterAiEventIntermission();
+              return;
+            }
+
+            this.startCombatRoom(room);
+          });
+        }
+
+        private startCombatRoom(room: RaidRoomDefinition) {
+          this.raidStatus = "running";
+          this.statusText = `${room.name} breach active.`;
+          this.clearStateOverlay();
+          this.clearPortal();
+          this.clearRoomCombat();
+          this.player.body.enable = true;
+          this.player.body.stop();
+
+          const extraDrones =
+            room.id === "surge-chamber" && this.roomEventModifier === "DRONE_SWARM" ? 2 : 0;
+
+          for (let index = 0; index < room.crawlers; index += 1) {
+            this.spawnCrawler(index, room);
+          }
+
+          for (let index = 0; index < room.drones + extraDrones; index += 1) {
+            this.spawnDrone(index, room);
+          }
+
+          for (let index = 0; index < room.eliteDrones; index += 1) {
+            this.spawnEliteDrone(index, room);
           }
 
           this.emitHud(true);
+        }
+
+        private enterRewardDraft() {
+          const room = this.getCurrentRoom();
+
+          if (this.rewardPresentedForRoom === room.number) {
+            return;
+          }
+
+          this.rewardPresentedForRoom = room.number;
+          this.raidStatus = "reward";
+          this.statusText = `${room.name} cleared. Choose a raid reward.`;
+          this.player.body.stop();
+          this.clearProjectiles();
+          this.showStateText("ROOM CLEARED", "Choose one raid reward to continue.");
+          onRewardOffer(
+            getRewardOffers({
+              currentWeaponId: this.currentWeapon.id,
+              roomNumber: room.number,
+              selectedUpgrades: this.selectedUpgrades,
+            }),
+          );
+          this.emitHud(true);
+        }
+
+        private applyRewardSelection(selection: RewardSelection) {
+          if (this.raidStatus !== "reward") {
+            return;
+          }
+
+          const { reward } = selection;
+
+          if (reward.type === "weapon" && reward.weaponId) {
+            this.currentWeapon = getWeaponById(reward.weaponId);
+            this.statusText = `${this.currentWeapon.name} equipped for the next chamber.`;
+          } else if (reward.type === "upgrade" && reward.upgradeId) {
+            this.applyUpgradeEffect(reward.upgradeId);
+            const upgrade = getUpgradeById(reward.upgradeId);
+            this.statusText = `${upgrade.name} installed.`;
+          } else if (reward.type === "repair") {
+            this.hp = Math.min(this.maxHp, this.hp + (reward.healAmount ?? 0));
+            this.statusText = "Repair kit applied. Integrity restored.";
+          } else if (reward.type === "score") {
+            this.score += reward.scoreAmount ?? 0;
+            this.statusText = "Score cache secured.";
+          }
+
+          onRewardOffer(null);
+          this.showTransientStateText(
+            reward.name.toUpperCase(),
+            reward.description,
+            880,
+            ["reward", "portal"],
+          );
+          this.spawnPortal("normal");
+          this.emitHud(true);
+        }
+
+        private enterAiEventIntermission() {
+          this.raidStatus = "ai-event";
+          this.surgeEventTriggered = true;
+          this.statusText = "AI Director analyzing Surge Chamber instability.";
+          this.player.body.stop();
+          this.clearProjectiles();
+          this.showStateText(
+            "AI DIRECTOR UPLINK",
+            "Surge Chamber crisis event pending operator confirmation.",
+          );
+          onAiEventRequest({
+            damageTaken: this.damageTaken,
+            kills: this.kills,
+            playerHp: this.hp,
+            selectedUpgrades: this.selectedUpgrades.map((upgrade) => upgrade.name),
+            wave: 3,
+          });
+          this.emitHud(true);
+        }
+
+        private applyAiEvent(directive: AiEventDirective) {
+          if (this.raidStatus !== "ai-event") {
+            return;
+          }
+
+          this.roomEventModifier = directive.modifier;
+          this.roomEnemySpeedMultiplier = directive.modifier === "POWER_SURGE" ? 1.12 : 1;
+          this.roomBulletDamageMultiplier =
+            directive.modifier === "OVERCHARGED_WEAPONS" ? 1.2 : 1;
+          this.roomDashCooldownMultiplier =
+            directive.modifier === "SYSTEM_LAG" ? 1.25 : 1;
+
+          if (directive.modifier === "EMERGENCY_CACHE") {
+            this.hp = Math.min(this.maxHp, this.hp + 25);
+          }
+
+          this.statusText = `${directive.eventTitle}: ${directive.eventText}`;
+          this.emitPhasePulse(0xff7d38, 0.22);
+          this.showTransientStateText(
+            directive.eventTitle.toUpperCase(),
+            directive.eventText,
+            980,
+            ["ai-event"],
+          );
+          this.time.delayedCall(980, () => {
+            if (this.raidStatus === "ai-event") {
+              this.startCombatRoom(this.getCurrentRoom());
+            }
+          });
+        }
+
+        private spawnPortal(kind: PortalKind) {
+          this.clearPortal();
+          this.raidStatus = "portal";
+          this.portalEnterLocked = false;
+          this.clearProjectiles();
+
+          const portalColor = kind === "boss" ? 0xff6f3a : 0x58f3ff;
+          const strokeColor = kind === "boss" ? 0xffb347 : 0xdffcff;
+          const labelText = kind === "boss" ? "Enter Boss Chamber" : "Enter Portal";
+
+          const shadow = this.add.ellipse(
+            RAID_GAME_WIDTH / 2,
+            RAID_GAME_HEIGHT / 2 + 22,
+            104,
+            30,
+            0x000000,
+            0.32,
+          );
+          shadow.setDepth(3);
+          const portal = this.add.circle(
+            RAID_GAME_WIDTH / 2,
+            RAID_GAME_HEIGHT / 2,
+            kind === "boss" ? 36 : 34,
+            portalColor,
+            kind === "boss" ? 0.18 : 0.14,
+          ) as PortalSprite;
+          portal.setStrokeStyle(4, strokeColor, 0.95);
+          portal.setDepth(5);
+          portal.kind = kind;
+          portal.activatedAt = this.time.now;
+          portal.shadow = shadow;
+
+          portal.aura = this.add.graphics();
+          portal.aura.setDepth(4);
+          portal.label = this.add
+            .text(
+              RAID_GAME_WIDTH / 2,
+              RAID_GAME_HEIGHT / 2 + 64,
+              labelText,
+              {
+                color: kind === "boss" ? "#ffb692" : "#c8f7ff",
+                fontFamily: "Segoe UI, Arial, sans-serif",
+                fontSize: "13px",
+                fontStyle: "bold",
+              },
+            )
+            .setOrigin(0.5)
+            .setDepth(6);
+
+          this.physics.add.existing(portal);
+          portal.body.setCircle(kind === "boss" ? 36 : 34);
+          portal.body.setAllowGravity(false);
+          portal.body.setImmovable(true);
+
+          this.physics.add.overlap(
+            this.player,
+            portal,
+            this.handlePortalOverlap,
+            undefined,
+            this,
+          );
+
+          this.activePortal = portal;
+          this.statusText =
+            kind === "boss"
+              ? "BLACKOUT CORE SIGNAL LOCKED. Enter the corrupted gate."
+              : "Portal online. Advance to the next chamber.";
+          this.cameras.main.flash(
+            120,
+            kind === "boss" ? 255 : 88,
+            kind === "boss" ? 110 : 243,
+            kind === "boss" ? 72 : 255,
+            false,
+          );
+          this.showTransientStateText(
+            kind === "boss" ? "BLACKOUT CORE SIGNAL LOCKED" : "ROOM CLEARED",
+            kind === "boss"
+              ? "Corrupted boss portal stabilized. Enter the final chamber."
+              : "Portal stabilized. Move through to continue.",
+            1150,
+            ["portal"],
+          );
+          this.emitHud(true);
+        }
+
+        private handlePortalOverlap(playerObject: unknown, portalObject: unknown) {
+          if (
+            !playerObject ||
+            !portalObject ||
+            !this.activePortal?.active ||
+            this.raidStatus !== "portal" ||
+            this.portalEnterLocked
+          ) {
+            return;
+          }
+
+          this.portalEnterLocked = true;
+          this.enterPortal(this.activePortal.kind);
+        }
+
+        private enterPortal(kind: PortalKind) {
+          const nextRoomIndex = Math.min(this.currentRoomIndex + 1, RAID_ROOMS.length - 1);
+          const color = kind === "boss" ? 0xff7848 : 0x58f3ff;
+
+          this.clearRoomCombat();
+          this.clearProjectiles();
+          this.player.body.stop();
+          this.activePortal?.aura?.clear();
+          this.emitBurst(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2, color, 14);
+          this.cameras.main.shake(kind === "boss" ? 180 : 120, kind === "boss" ? 0.006 : 0.004);
+          this.cameras.main.flash(
+            170,
+            kind === "boss" ? 255 : 88,
+            kind === "boss" ? 112 : 243,
+            kind === "boss" ? 74 : 255,
+            false,
+          );
+          this.clearPortal();
+          this.showStateText(
+            kind === "boss" ? "CORRUPTED TRANSIT" : "PORTAL TRANSIT",
+            kind === "boss"
+              ? "Boss chamber breach in progress."
+              : "Routing operator into the next chamber.",
+          );
+          this.time.delayedCall(420, () => this.enterRoomIntro(nextRoomIndex));
         }
 
         private updatePlayerMovement(time: number) {
@@ -587,8 +996,24 @@ export function PhaserRaidGame({
           this.dashUntil = time + RAID_PLAYER.dashDurationMs;
         }
 
-        private getDashCooldownMs(): number {
-          return Math.round(this.dashCooldownMs * this.waveDashCooldownMultiplier);
+        private getDashCooldownMs() {
+          return Math.round(
+            RAID_PLAYER.dashCooldownMs *
+              this.dashCooldownMultiplier *
+              this.roomDashCooldownMultiplier,
+          );
+        }
+
+        private getPlayerFireRateMs() {
+          return Math.max(85, Math.round(this.currentWeapon.fireRateMs * this.fireRateMultiplier));
+        }
+
+        private getPlayerBulletDamage() {
+          return Math.round(this.currentWeapon.damage * this.roomBulletDamageMultiplier);
+        }
+
+        private getPlayerPierce() {
+          return this.currentWeapon.pierce + this.bulletPierceBonus;
         }
 
         private updateAimLine() {
@@ -602,7 +1027,11 @@ export function PhaserRaidGame({
 
           this.player.setRotation(angle);
           this.aimLine.clear();
-          this.aimLine.lineStyle(3, 0x2afcdb, 0.82);
+          this.aimLine.lineStyle(
+            this.currentWeapon.id === "scatter-cannon" ? 2 : 3,
+            this.currentWeapon.tint,
+            0.84,
+          );
           this.aimLine.beginPath();
           this.aimLine.moveTo(this.player.x, this.player.y);
           this.aimLine.lineTo(
@@ -613,36 +1042,62 @@ export function PhaserRaidGame({
         }
 
         private handleShooting(time: number) {
+          if (this.raidStatus !== "running" && this.raidStatus !== "boss") {
+            return;
+          }
+
           const pointer = this.input.activePointer;
 
           if (
             !pointer.isDown ||
             !pointer.leftButtonDown() ||
-            time - this.lastShotAt < this.fireRateMs
+            time - this.lastShotAt < this.getPlayerFireRateMs()
           ) {
             return;
           }
 
-          const angle = PhaserLib.Math.Angle.Between(
+          const baseAngle = PhaserLib.Math.Angle.Between(
             this.player.x,
             this.player.y,
             pointer.worldX,
             pointer.worldY,
           );
-          const isCritical = this.critChance > 0 && Math.random() < this.critChance;
-          const shotDamage = Math.round(this.bulletDamage * this.waveBulletDamageMultiplier);
+          const angles = this.getShotAngles(baseAngle, this.currentWeapon);
 
-          this.spawnBullet({
-            angle,
-            damage: isCritical ? shotDamage * 2 : shotDamage,
-            owner: "player",
-            pierceRemaining: this.bulletPierce,
-            speed: RAID_BULLET.speed,
-            x: this.player.x + Math.cos(angle) * 22,
-            y: this.player.y + Math.sin(angle) * 22,
+          angles.forEach((angle) => {
+            const isCritical = this.critChance > 0 && Math.random() < this.critChance;
+            const shotDamage = this.getPlayerBulletDamage();
+
+            this.spawnBullet({
+              angle,
+              damage: isCritical ? shotDamage * 2 : shotDamage,
+              owner: "player",
+              pierceRemaining: this.getPlayerPierce(),
+              projectileRadius: this.currentWeapon.projectileRadius,
+              projectileShape: this.currentWeapon.projectileShape,
+              speed: this.currentWeapon.projectileSpeed,
+              tint: this.currentWeapon.tint,
+              trailLength: this.currentWeapon.trailLength,
+              x: this.player.x + Math.cos(angle) * 22,
+              y: this.player.y + Math.sin(angle) * 22,
+            });
+            this.shotsFired += 1;
           });
-          this.shotsFired += 1;
+
           this.lastShotAt = time;
+        }
+
+        private getShotAngles(baseAngle: number, weapon: WeaponDefinition) {
+          if (weapon.pelletCount <= 1) {
+            return [baseAngle];
+          }
+
+          const half = (weapon.pelletCount - 1) / 2;
+
+          return Array.from({ length: weapon.pelletCount }, (_, index) => {
+            const offsetIndex = index - half;
+            return baseAngle + offsetIndex * (weapon.spread / Math.max(1, half));
+          });
         }
 
         private spawnBullet({
@@ -650,7 +1105,11 @@ export function PhaserRaidGame({
           damage,
           owner,
           pierceRemaining,
+          projectileRadius,
+          projectileShape,
           speed,
+          tint,
+          trailLength,
           x,
           y,
         }: {
@@ -658,31 +1117,59 @@ export function PhaserRaidGame({
           damage: number;
           owner: BulletOwner;
           pierceRemaining: number;
+          projectileRadius: number;
+          projectileShape: "orb" | "rail";
           speed: number;
+          tint: number;
+          trailLength: number;
           x: number;
           y: number;
         }) {
           const fillColor =
-            owner === "player" ? 0x73f7ff : owner === "boss" ? 0xff3f25 : 0xff6f2d;
-          const strokeColor = owner === "player" ? 0xcfffff : 0xffc08a;
-          const bullet = this.add.circle(
-            x,
-            y,
-            owner === "player" ? RAID_BULLET.radius : RAID_ENEMY_BULLET.radius,
-            fillColor,
-            1,
-          ) as BulletSprite;
-          bullet.setStrokeStyle(2, strokeColor, 0.9);
+            owner === "player" ? tint : owner === "boss" ? 0xff4a2e : 0xff7a3c;
+          const strokeColor =
+            owner === "player" ? 0xe0feff : owner === "boss" ? 0xffcf9f : 0xffb882;
+          const bullet =
+            projectileShape === "rail" && owner === "player"
+              ? (this.add.rectangle(
+                  x,
+                  y,
+                  22,
+                  Math.max(4, projectileRadius * 2),
+                  fillColor,
+                  1,
+                ) as BulletSprite)
+              : (this.add.circle(
+                  x,
+                  y,
+                  owner === "player" ? projectileRadius : RAID_ENEMY_BULLET.radius,
+                  fillColor,
+                  1,
+                ) as BulletSprite);
+
+          bullet.setStrokeStyle(2, strokeColor, 0.95);
+          bullet.setRotation(angle);
           bullet.damage = damage;
           bullet.owner = owner;
           bullet.pierceRemaining = pierceRemaining;
           bullet.hitEnemyIds = new Set();
           bullet.bornAt = this.time.now;
           bullet.trailColor = fillColor;
+          bullet.trailLength =
+            owner === "player" ? trailLength : owner === "boss" ? 26 : 18;
+          bullet.bulletShape = projectileShape;
           bullet.setDepth(owner === "player" ? 7 : 6);
 
           this.physics.add.existing(bullet);
-          bullet.body.setCircle(owner === "player" ? RAID_BULLET.radius : RAID_ENEMY_BULLET.radius);
+
+          if (bullet instanceof PhaserLib.GameObjects.Arc) {
+            bullet.body.setCircle(
+              owner === "player" ? projectileRadius : RAID_ENEMY_BULLET.radius,
+            );
+          } else {
+            bullet.body.setSize(22, Math.max(4, projectileRadius * 2));
+          }
+
           bullet.body.setAllowGravity(false);
           bullet.body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
 
@@ -693,8 +1180,8 @@ export function PhaserRaidGame({
           }
         }
 
-        private spawnCrawler(index: number) {
-          const { x, y } = this.getEdgeSpawnPoint(index);
+        private spawnCrawler(index: number, room: RaidRoomDefinition) {
+          const { x, y } = this.getRoomSpawnPoint(room, index, 0);
           const shadow = this.add.ellipse(x, y + 14, 28, 14, 0x000000, 0.28);
           shadow.setDepth(3);
           const crawler = this.add.circle(
@@ -724,66 +1211,70 @@ export function PhaserRaidGame({
           this.enemies.add(crawler);
         }
 
-        private spawnDrone(index: number) {
-          const { x, y } = this.getEdgeSpawnPoint(index + 11);
-          const shadow = this.add.ellipse(x, y + 16, 32, 16, 0x000000, 0.28);
-          shadow.setDepth(3);
-          const drone = this.add.rectangle(
+        private spawnDrone(index: number, room: RaidRoomDefinition) {
+          this.spawnDroneVariant(index, room, "drone");
+        }
+
+        private spawnEliteDrone(index: number, room: RaidRoomDefinition) {
+          this.spawnDroneVariant(index, room, "elite-drone");
+        }
+
+        private spawnDroneVariant(
+          index: number,
+          room: RaidRoomDefinition,
+          kind: "drone" | "elite-drone",
+        ) {
+          const config = kind === "elite-drone" ? RAID_ELITE_DRONE : RAID_DRONE;
+          const { x, y } = this.getRoomSpawnPoint(room, index, kind === "elite-drone" ? 17 : 11);
+          const shadow = this.add.ellipse(
             x,
-            y,
-            RAID_DRONE.radius * 2,
-            RAID_DRONE.radius * 2,
-            0xb52512,
-            1,
-          ) as EnemySprite;
-          drone.setStrokeStyle(3, 0xffb347, 0.95);
+            y + 16,
+            kind === "elite-drone" ? 38 : 32,
+            16,
+            0x000000,
+            0.28,
+          );
+          shadow.setDepth(3);
+          const fillColor = kind === "elite-drone" ? 0x7f1321 : 0xb52512;
+          const strokeColor = kind === "elite-drone" ? 0xff7a6a : 0xffb347;
+          const size = config.radius * 2;
+          const drone = this.add.rectangle(x, y, size, size, fillColor, 1) as EnemySprite;
+          drone.setStrokeStyle(3, strokeColor, 0.95);
           drone.setDepth(5);
-          drone.baseFillColor = 0xb52512;
-          drone.baseStrokeColor = 0xffb347;
+          drone.rotation = kind === "elite-drone" ? Math.PI / 4 : 0;
+          drone.baseFillColor = fillColor;
+          drone.baseStrokeColor = strokeColor;
           drone.enemyId = this.nextEnemyId;
-          drone.hp = RAID_DRONE.hp;
-          drone.kind = "drone";
-          drone.lastShotAt = this.time.now + index * 180;
-          drone.scoreValue = RAID_DRONE.scoreValue;
+          drone.hp = config.hp;
+          drone.kind = kind;
+          drone.lastShotAt = this.time.now + index * (kind === "elite-drone" ? 120 : 180);
+          drone.scoreValue = config.scoreValue;
           drone.shadow = shadow;
-          drone.speed = Math.round(RAID_DRONE.speed * this.getEnemySpeedMultiplier());
+          drone.speed = Math.round(config.speed * this.getEnemySpeedMultiplier());
           this.nextEnemyId += 1;
 
           this.physics.add.existing(drone);
-          drone.body.setSize(RAID_DRONE.radius * 2, RAID_DRONE.radius * 2);
+          drone.body.setSize(size, size);
           drone.body.setCollideWorldBounds(true);
           drone.body.setAllowGravity(false);
           this.enemies.add(drone);
         }
 
-        private getEnemySpeedMultiplier(): number {
-          if (this.raidStatus === "running" && this.currentWaveIndex === 2) {
-            return this.waveEnemySpeedMultiplier;
+        private getEnemySpeedMultiplier() {
+          if (this.getCurrentRoom().id === "surge-chamber" && this.raidStatus === "running") {
+            return this.roomEnemySpeedMultiplier;
           }
 
           return 1;
         }
 
-        private getEdgeSpawnPoint(index: number): { x: number; y: number } {
-          const edge = index % 4;
-          const min = RAID_ARENA_PADDING + 24;
-          const maxX = RAID_GAME_WIDTH - RAID_ARENA_PADDING - 24;
-          const maxY = RAID_GAME_HEIGHT - RAID_ARENA_PADDING - 24;
-          const offset = ((index * 137) % 100) / 100;
-          let x = PhaserLib.Math.Linear(min, maxX, offset);
-          let y = PhaserLib.Math.Linear(min, maxY, 1 - offset);
-
-          if (edge === 0) {
-            y = min;
-          } else if (edge === 1) {
-            x = maxX;
-          } else if (edge === 2) {
-            y = maxY;
-          } else {
-            x = min;
-          }
-
-          return { x, y };
+        private getRoomSpawnPoint(
+          room: RaidRoomDefinition,
+          index: number,
+          offset: number,
+        ) {
+          const pattern = ROOM_SPAWN_POINTS[room.id];
+          return pattern[(index + offset) % pattern.length] ?? pattern[0];
         }
 
         private updateEnemies(time: number) {
@@ -804,6 +1295,7 @@ export function PhaserRaidGame({
         }
 
         private updateDrone(drone: EnemySprite, time: number) {
+          const config = drone.kind === "elite-drone" ? RAID_ELITE_DRONE : RAID_DRONE;
           const distance = PhaserLib.Math.Distance.Between(
             drone.x,
             drone.y,
@@ -815,25 +1307,26 @@ export function PhaserRaidGame({
             this.player.y - drone.y,
           );
 
-          if (distance < RAID_DRONE.retreatDistance && toPlayer.lengthSq() > 0) {
+          if (distance < config.retreatDistance && toPlayer.lengthSq() > 0) {
             toPlayer.normalize().scale(-drone.speed);
             drone.body.setVelocity(toPlayer.x, toPlayer.y);
-          } else if (distance > RAID_DRONE.preferredDistance && toPlayer.lengthSq() > 0) {
+          } else if (distance > config.preferredDistance && toPlayer.lengthSq() > 0) {
             toPlayer.normalize().scale(drone.speed);
             drone.body.setVelocity(toPlayer.x, toPlayer.y);
           } else {
             drone.body.setVelocity(0, 0);
           }
 
-          drone.rotation += 0.025;
+          drone.rotation += drone.kind === "elite-drone" ? 0.034 : 0.024;
 
-          if (time - drone.lastShotAt >= RAID_DRONE.fireRateMs) {
+          if (time - drone.lastShotAt >= config.fireRateMs) {
             this.fireDroneShot(drone);
             drone.lastShotAt = time;
           }
         }
 
         private fireDroneShot(drone: EnemySprite) {
+          const isElite = drone.kind === "elite-drone";
           const angle = PhaserLib.Math.Angle.Between(
             drone.x,
             drone.y,
@@ -843,10 +1336,14 @@ export function PhaserRaidGame({
 
           this.spawnBullet({
             angle,
-            damage: RAID_ENEMY_BULLET.damage,
+            damage: isElite ? RAID_ELITE_DRONE.damage : RAID_ENEMY_BULLET.damage,
             owner: "enemy",
             pierceRemaining: 0,
-            speed: RAID_ENEMY_BULLET.speed,
+            projectileRadius: RAID_ENEMY_BULLET.radius,
+            projectileShape: "orb",
+            speed: isElite ? RAID_ENEMY_BULLET.speed + 34 : RAID_ENEMY_BULLET.speed,
+            tint: isElite ? 0xff5b54 : 0xff8f47,
+            trailLength: isElite ? 22 : 18,
             x: drone.x + Math.cos(angle) * 20,
             y: drone.y + Math.sin(angle) * 20,
           });
@@ -894,7 +1391,11 @@ export function PhaserRaidGame({
             }
 
             enemy.setFillStyle(enemy.baseFillColor, 1);
-            enemy.setStrokeStyle(3, enemy.baseStrokeColor, enemy.kind === "drone" ? 0.95 : 0.85);
+            enemy.setStrokeStyle(
+              3,
+              enemy.baseStrokeColor,
+              enemy.kind === "crawler" ? 0.85 : 0.95,
+            );
           });
         }
 
@@ -924,11 +1425,7 @@ export function PhaserRaidGame({
           const bullet = bulletObject as BulletSprite;
           const enemy = enemyObject as EnemySprite;
 
-          if (
-            !bullet.active ||
-            !enemy.active ||
-            bullet.hitEnemyIds.has(enemy.enemyId)
-          ) {
+          if (!bullet.active || !enemy.active || bullet.hitEnemyIds.has(enemy.enemyId)) {
             return;
           }
 
@@ -940,7 +1437,12 @@ export function PhaserRaidGame({
           this.flashEnemy(enemy);
 
           if (enemy.hp <= 0) {
-            this.emitBurst(enemy.x, enemy.y, enemy.baseFillColor, enemy.kind === "crawler" ? 8 : 10);
+            this.emitBurst(
+              enemy.x,
+              enemy.y,
+              enemy.baseFillColor,
+              enemy.kind === "crawler" ? 8 : enemy.kind === "elite-drone" ? 12 : 10,
+            );
             enemy.shadow?.destroy();
             enemy.destroy();
             this.kills += 1;
@@ -996,7 +1498,6 @@ export function PhaserRaidGame({
           }
 
           const actualDamage = Math.min(this.hp, damage);
-
           this.damageTaken += actualDamage;
           this.hp = Math.max(0, this.hp - actualDamage);
           this.cameras.main.flash(90, 255, 82, 48, false);
@@ -1018,121 +1519,60 @@ export function PhaserRaidGame({
           }
         }
 
-        private checkWaveClear() {
+        private checkRoomClear() {
           if (this.raidStatus !== "running" || this.enemies.countActive(true) > 0) {
             return;
           }
 
+          const room = this.getCurrentRoom();
           this.player.body.setVelocity(0, 0);
           this.clearProjectiles();
-          this.roomsCleared = Math.max(this.roomsCleared, this.currentWaveIndex + 1);
+          this.roomsCleared = Math.max(this.roomsCleared, room.number);
 
-          if (this.currentWaveIndex >= RAID_WAVES.length - 1) {
-            this.enterBossEntry();
+          if (room.hasReward) {
+            this.enterRewardDraft();
             return;
           }
 
-          this.enterUpgradeIntermission();
-        }
-
-        private enterUpgradeIntermission() {
-          this.raidStatus = "upgrade";
-          this.statusText = `Wave ${RAID_WAVES[this.currentWaveIndex].wave} cleared. Select an upgrade.`;
-          this.showStateText("WAVE CLEARED", "Select one upgrade to continue.");
-          const offers = getUpgradeOffers(this.score + this.kills + this.currentWaveIndex * 97);
-          onUpgradeOffer(offers);
-          this.emitHud(true);
-        }
-
-        private applyUpgrade(upgradeId: UpgradeId) {
-          if (this.raidStatus !== "upgrade") {
-            return;
+          if (room.id === "surge-chamber") {
+            this.spawnPortal("boss");
           }
+        }
 
+        private applyUpgradeEffect(upgradeId: UpgradeId) {
           const upgrade = getUpgradeById(upgradeId);
 
-          if (upgrade.id === "overclocked-barrel") {
-            this.fireRateMs = Math.max(90, Math.round(this.fireRateMs * 0.8));
-          } else if (upgrade.id === "reinforced-armor") {
+          if (upgradeId === "overclocked-barrel") {
+            this.fireRateMultiplier = Math.max(0.4, this.fireRateMultiplier * 0.8);
+          } else if (upgradeId === "reinforced-armor") {
             this.maxHp += 25;
             this.hp = Math.min(this.maxHp, this.hp + 25);
-          } else if (upgrade.id === "emergency-dash") {
-            this.dashCooldownMs = Math.max(500, Math.round(this.dashCooldownMs * 0.8));
-          } else if (upgrade.id === "piercing-pulse") {
-            this.bulletPierce = Math.max(this.bulletPierce, 1);
-          } else if (upgrade.id === "stabilizer-core") {
+          } else if (upgradeId === "emergency-dash") {
+            this.dashCooldownMultiplier = Math.max(0.42, this.dashCooldownMultiplier * 0.8);
+          } else if (upgradeId === "piercing-pulse") {
+            this.bulletPierceBonus = Math.max(this.bulletPierceBonus, 1);
+          } else if (upgradeId === "stabilizer-core") {
             this.hp = Math.min(this.maxHp, this.hp + 20);
-          } else if (upgrade.id === "critical-firmware") {
+          } else if (upgradeId === "critical-firmware") {
             this.critChance = Math.min(0.35, this.critChance + 0.15);
           }
 
-          this.selectedUpgrades = [...this.selectedUpgrades, upgrade];
-          onUpgradeOffer(null);
-
-          const nextWaveIndex = this.currentWaveIndex + 1;
-
-          if (nextWaveIndex === 2) {
-            this.enterAiEventIntermission();
-          } else {
-            this.startWave(nextWaveIndex);
+          if (!this.selectedUpgrades.some((entry) => entry.id === upgrade.id)) {
+            this.selectedUpgrades = [...this.selectedUpgrades, upgrade];
           }
-        }
-
-        private enterAiEventIntermission() {
-          this.raidStatus = "ai-event";
-          this.statusText = "AI Director analyzing Wave 3 breach conditions.";
-          this.player.body.setVelocity(0, 0);
-          this.clearProjectiles();
-          this.showStateText(
-            "AI DIRECTOR UPLINK",
-            "Wave 3 crisis event pending operator confirmation.",
-          );
-          onAiEventRequest({
-            damageTaken: this.damageTaken,
-            kills: this.kills,
-            playerHp: this.hp,
-            selectedUpgrades: this.selectedUpgrades.map((upgrade) => upgrade.name),
-            wave: 3,
-          });
-          this.emitHud(true);
-        }
-
-        private applyAiEvent(directive: AiEventDirective) {
-          if (this.raidStatus !== "ai-event") {
-            return;
-          }
-
-          this.waveEventModifier = directive.modifier;
-          this.waveEnemySpeedMultiplier = directive.modifier === "POWER_SURGE" ? 1.12 : 1;
-          this.waveBulletDamageMultiplier =
-            directive.modifier === "OVERCHARGED_WEAPONS" ? 1.15 : 1;
-          this.waveDashCooldownMultiplier =
-            directive.modifier === "SYSTEM_LAG" ? 1.18 : 1;
-
-          if (directive.modifier === "EMERGENCY_CACHE") {
-            this.hp = Math.min(this.maxHp, this.hp + 25);
-          }
-
-          this.statusText = `${directive.eventTitle}: ${directive.eventText}`;
-          this.emitPhasePulse(0xff7d38, 0.22);
-          this.showStateText(directive.eventTitle.toUpperCase(), directive.eventText);
-          this.time.delayedCall(950, () => {
-            if (this.raidStatus === "ai-event") {
-              this.startWave(2);
-            }
-          });
         }
 
         private enterBossEntry() {
-          this.clearWaveEventModifiers();
+          this.clearPortal();
           this.raidStatus = "boss-entry";
           this.statusText = "BLACKOUT CORE DETECTED. Final threat inbound.";
+          this.clearRoomEventModifiers(false);
           this.showStateText(
             "BLACKOUT CORE DETECTED",
-            "Final boss entering the arena.",
+            "Final threat inbound. Corrupted chamber is destabilizing.",
           );
           this.cameras.main.shake(260, 0.008);
-          onUpgradeOffer(null);
+          onRewardOffer(null);
           this.emitHud(true);
           this.time.delayedCall(1700, () => {
             if (this.raidStatus === "boss-entry") {
@@ -1159,10 +1599,10 @@ export function PhaserRaidGame({
           const bossShadow = this.add.ellipse(
             RAID_GAME_WIDTH / 2,
             RAID_GAME_HEIGHT / 2 + 22,
-            120,
-            44,
+            124,
+            46,
             0x000000,
-            0.34,
+            0.36,
           );
           bossShadow.setDepth(3);
           this.boss = this.add.circle(
@@ -1192,20 +1632,27 @@ export function PhaserRaidGame({
             this,
           );
 
+          this.emitBurst(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2, 0xff7a44, 14);
+          this.cameras.main.flash(180, 255, 120, 72, false);
           this.showTransientStateText(
             "PHASE 1: DETECTION",
             "The Core is reading your movement.",
             1350,
+            ["boss"],
           );
           this.emitPhasePulse(0xff7d38, 0.24);
           this.emitHud(true);
         }
 
-        private clearWaveEventModifiers() {
-          this.waveEventModifier = null;
-          this.waveEnemySpeedMultiplier = 1;
-          this.waveBulletDamageMultiplier = 1;
-          this.waveDashCooldownMultiplier = 1;
+        private clearRoomEventModifiers(keepSurgeEffects: boolean) {
+          if (keepSurgeEffects) {
+            return;
+          }
+
+          this.roomEventModifier = null;
+          this.roomEnemySpeedMultiplier = 1;
+          this.roomBulletDamageMultiplier = 1;
+          this.roomDashCooldownMultiplier = 1;
           this.lowVisibilityOverlay?.clear();
         }
 
@@ -1244,10 +1691,18 @@ export function PhaserRaidGame({
           this.boss.rotation += 0.012;
           this.boss.shadow?.setScale(1 + Math.sin(time / 220) * 0.04, 1);
           this.bossAura.clear();
-          this.bossAura.lineStyle(3, 0xff5a1f, 0.22);
-          this.bossAura.strokeCircle(this.boss.x, this.boss.y, RAID_BOSS.radius + 18 + Math.sin(time / 180) * 6);
+          this.bossAura.lineStyle(3, 0xff5a1f, 0.24);
+          this.bossAura.strokeCircle(
+            this.boss.x,
+            this.boss.y,
+            RAID_BOSS.radius + 18 + Math.sin(time / 180) * 6,
+          );
           this.bossAura.lineStyle(2, 0xffb347, 0.18);
-          this.bossAura.strokeCircle(this.boss.x, this.boss.y, RAID_BOSS.radius + 34 + Math.cos(time / 220) * 8);
+          this.bossAura.strokeCircle(
+            this.boss.x,
+            this.boss.y,
+            RAID_BOSS.radius + 34 + Math.cos(time / 220) * 8,
+          );
         }
 
         private updateBossPhase() {
@@ -1275,8 +1730,9 @@ export function PhaserRaidGame({
             this.statusText = "The Core is adapting to your attack pattern.";
             this.showTransientStateText(
               "PHASE 2: ADAPTATION",
-              "The Core is adapting to your attack pattern. Summoner mode activated.",
+              "The Core is adapting to your attack pattern.",
               1700,
+              ["boss"],
             );
             this.nextBossSummonAt = this.time.now + 1200;
           } else {
@@ -1285,6 +1741,7 @@ export function PhaserRaidGame({
               "PHASE 3: OVERLOAD",
               "BLACKOUT CORE entered overload. Survive the final surge.",
               1750,
+              ["boss"],
             );
             this.startShockwave();
             this.nextBossSummonAt = this.time.now + 850;
@@ -1311,6 +1768,7 @@ export function PhaserRaidGame({
             selection.directive.phaseTitle.toUpperCase(),
             selection.directive.message,
             1750,
+            ["boss"],
           );
           this.cameras.main.shake(180, 0.006);
           this.emitHud(true);
@@ -1382,7 +1840,7 @@ export function PhaserRaidGame({
             this.bossAimedShot();
 
             if (this.bossAttackCounter % 5 === 0) {
-              this.bossSummonMinions(1, 0);
+              this.bossSummonMinions(1, 0, 0);
             }
           } else if (this.bossPhase === 2) {
             this.executeModeAttack(2);
@@ -1398,7 +1856,7 @@ export function PhaserRaidGame({
 
           if (this.bossMode === "summoner") {
             if (this.bossAttackCounter % (isOverload ? 2 : 3) === 0) {
-              this.bossSummonMinions(2, 1);
+              this.bossSummonMinions(2, 1, isOverload ? 1 : 0);
             } else {
               this.bossAimedShot(isOverload ? 3 : 2);
             }
@@ -1407,7 +1865,10 @@ export function PhaserRaidGame({
 
           if (this.bossMode === "bullet_hell") {
             if (this.bossAttackCounter % 2 === 0) {
-              this.bossRadialBurst(isOverload ? 20 : 14, RAID_BOSS.radialShotSpeed + 35);
+              this.bossRadialBurst(
+                isOverload ? 20 : 14,
+                RAID_BOSS.radialShotSpeed + 35,
+              );
             } else {
               this.bossAimedShot(isOverload ? 3 : 2);
             }
@@ -1430,7 +1891,7 @@ export function PhaserRaidGame({
 
           if (this.bossMode === "shield_core") {
             if (this.bossAttackCounter % 4 === 0) {
-              this.bossSummonMinions(1, isOverload ? 2 : 1);
+              this.bossSummonMinions(1, isOverload ? 2 : 1, 0);
             } else {
               this.bossRadialBurst(isOverload ? 16 : 10, RAID_BOSS.radialShotSpeed);
             }
@@ -1440,7 +1901,7 @@ export function PhaserRaidGame({
           this.bossAimedShot(isOverload ? 3 : 2);
         }
 
-        private getBossAttackCadence(): number {
+        private getBossAttackCadence() {
           const modeAdjustment =
             this.bossMode === "berserker" || this.bossMode === "bullet_hell"
               ? -90
@@ -1470,17 +1931,29 @@ export function PhaserRaidGame({
             this.player.x,
             this.player.y,
           );
-          const spread = count === 1 ? [0] : count === 2 ? [-0.12, 0.12] : [-0.18, 0, 0.18];
+          const spread =
+            count === 1
+              ? [0]
+              : count === 2
+                ? [-0.12, 0.12]
+                : count === 3
+                  ? [-0.18, 0, 0.18]
+                  : [-0.24, -0.08, 0.08, 0.24];
 
           spread.forEach((offset) => {
+            const angle = baseAngle + offset;
             this.spawnBullet({
-              angle: baseAngle + offset,
+              angle,
               damage: RAID_BOSS.aimedShotDamage,
               owner: "boss",
               pierceRemaining: 0,
+              projectileRadius: RAID_ENEMY_BULLET.radius,
+              projectileShape: "orb",
               speed: RAID_BOSS.aimedShotSpeed,
-              x: this.boss!.x + Math.cos(baseAngle + offset) * (RAID_BOSS.radius + 12),
-              y: this.boss!.y + Math.sin(baseAngle + offset) * (RAID_BOSS.radius + 12),
+              tint: 0xff5b39,
+              trailLength: 24,
+              x: this.boss!.x + Math.cos(angle) * (RAID_BOSS.radius + 12),
+              y: this.boss!.y + Math.sin(angle) * (RAID_BOSS.radius + 12),
             });
           });
         }
@@ -1500,25 +1973,35 @@ export function PhaserRaidGame({
               damage: RAID_BOSS.radialShotDamage,
               owner: "boss",
               pierceRemaining: 0,
+              projectileRadius: RAID_ENEMY_BULLET.radius,
+              projectileShape: "orb",
               speed,
+              tint: 0xff6a3d,
+              trailLength: 22,
               x: this.boss.x + Math.cos(angle) * (RAID_BOSS.radius + 8),
               y: this.boss.y + Math.sin(angle) * (RAID_BOSS.radius + 8),
             });
           }
         }
 
-        private bossSummonMinions(crawlers = 2, drones = 0) {
+        private bossSummonMinions(crawlers = 2, drones = 0, eliteDrones = 0) {
+          const room = RAID_ROOMS[3];
+
           for (let index = 0; index < crawlers; index += 1) {
-            this.spawnCrawler(this.nextEnemyId + index);
+            this.spawnCrawler(this.nextEnemyId + index, room);
           }
 
           for (let index = 0; index < drones; index += 1) {
-            this.spawnDrone(this.nextEnemyId + index + 19);
+            this.spawnDrone(this.nextEnemyId + index + 19, room);
+          }
+
+          for (let index = 0; index < eliteDrones; index += 1) {
+            this.spawnEliteDrone(this.nextEnemyId + index + 33, room);
           }
 
           this.statusText =
             this.bossPhase === 3
-              ? "Overload surge: more hostiles entering the arena."
+              ? "Overload surge: more hostiles entering the chamber."
               : "The Core is summoning corrupted defenders.";
           this.emitHud(true);
         }
@@ -1555,10 +2038,19 @@ export function PhaserRaidGame({
           this.activeShockwave.ring.lineStyle(7, 0xffb347, 0.82 - progress * 0.42);
           this.activeShockwave.ring.strokeCircle(this.boss.x, this.boss.y, radius);
           this.activeShockwave.ring.lineStyle(2, 0xff2d1f, 0.64);
-          this.activeShockwave.ring.strokeCircle(this.boss.x, this.boss.y, Math.max(0, radius - 26));
+          this.activeShockwave.ring.strokeCircle(
+            this.boss.x,
+            this.boss.y,
+            Math.max(0, radius - 26),
+          );
+
           if (progress < 0.2) {
             this.activeShockwave.ring.lineStyle(3, 0xffffff, 0.24);
-            this.activeShockwave.ring.strokeCircle(this.boss.x, this.boss.y, RAID_BOSS.radius + 16);
+            this.activeShockwave.ring.strokeCircle(
+              this.boss.x,
+              this.boss.y,
+              RAID_BOSS.radius + 16,
+            );
           }
 
           const playerDistance = PhaserLib.Math.Distance.Between(
@@ -1644,8 +2136,9 @@ export function PhaserRaidGame({
           const bossShadow = this.boss.shadow;
           this.raidStatus = "victory";
           this.statusText = "Core destroyed. Raid complete.";
+          this.roomsCleared = RAID_ROOMS.length;
           this.score += 2500;
-          this.emitBurst(bossX, bossY, 0xffb347, 18);
+          this.emitBurst(bossX, bossY, 0xffb347, 20);
           this.boss.destroy();
           bossShadow?.destroy();
           this.boss = undefined;
@@ -1657,7 +2150,7 @@ export function PhaserRaidGame({
           this.activeShockwave?.ring.destroy();
           this.activeShockwave = null;
           this.cameras.main.shake(420, 0.012);
-          this.cameras.main.flash(150, 255, 190, 120, false);
+          this.cameras.main.flash(170, 255, 190, 120, false);
           this.showStateText("CORE DESTROYED", "Victory. Press R or use Restart Raid.");
           this.emitHud(true);
           this.reportRaidEnd("victory");
@@ -1675,7 +2168,7 @@ export function PhaserRaidGame({
           this.activeShockwave?.ring.destroy();
           this.activeShockwave = null;
           this.showStateText("OPERATOR DOWN", "Press R or use Restart Raid.");
-          onUpgradeOffer(null);
+          onRewardOffer(null);
           this.emitHud(true);
           this.reportRaidEnd("wipeout");
         }
@@ -1689,6 +2182,7 @@ export function PhaserRaidGame({
           onRaidEnd({
             bossModeHistory: this.bossModeHistory,
             damageTaken: this.damageTaken,
+            finalWeapon: this.currentWeapon.name,
             kills: this.kills,
             result,
             roomsCleared: this.roomsCleared,
@@ -1715,39 +2209,81 @@ export function PhaserRaidGame({
           });
         }
 
+        private clearRoomCombat() {
+          this.clearProjectiles();
+          this.clearEnemyShadows();
+          this.enemies?.clear(true, true);
+        }
+
+        private clearPortal() {
+          if (!this.activePortal) {
+            return;
+          }
+
+          this.activePortal.shadow?.destroy();
+          this.activePortal.aura?.destroy();
+          this.activePortal.label?.destroy();
+          this.activePortal.destroy();
+          this.activePortal = undefined;
+          this.portalEnterLocked = false;
+        }
+
+        private renderPortalPulse(time: number) {
+          if (!this.activePortal?.active || !this.activePortal.aura) {
+            return;
+          }
+
+          const portal = this.activePortal;
+          const aura = portal.aura;
+
+          if (!aura) {
+            return;
+          }
+
+          const pulse = 1 + Math.sin(time / 160) * 0.08;
+          const alpha = portal.kind === "boss" ? 0.26 : 0.22;
+          const baseColor = portal.kind === "boss" ? 0xff6f3a : 0x58f3ff;
+
+          portal.setScale(pulse);
+          portal.shadow?.setScale(1 + Math.sin(time / 220) * 0.04, 1);
+          aura.clear();
+          aura.lineStyle(4, baseColor, alpha);
+          aura.strokeCircle(portal.x, portal.y, 54 + Math.sin(time / 180) * 5);
+          aura.lineStyle(2, 0xffffff, alpha * 0.5);
+          aura.strokeCircle(portal.x, portal.y, 36 + Math.cos(time / 210) * 4);
+        }
+
         private showStateText(title: string, subtitle: string) {
           this.clearStateOverlay();
+          this.overlaySequence += 1;
           const panel = this.add.rectangle(
             RAID_GAME_WIDTH / 2,
             RAID_GAME_HEIGHT / 2,
-            500,
-            158,
+            520,
+            164,
             0x080c12,
             0.9,
           );
-          const titleText = this.add.text(
-            RAID_GAME_WIDTH / 2,
-            RAID_GAME_HEIGHT / 2 - 28,
-            title,
-            {
+          const titleText = this.add
+            .text(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2 - 28, title, {
               color: "#ffb347",
               fontFamily: "Segoe UI, Arial, sans-serif",
               fontSize: "30px",
               fontStyle: "bold",
-            },
-          ).setOrigin(0.5);
-          const subtitleText = this.add.text(
-            RAID_GAME_WIDTH / 2,
-            RAID_GAME_HEIGHT / 2 + 28,
-            subtitle,
-            {
+            })
+            .setOrigin(0.5);
+          const subtitleText = this.add
+            .text(RAID_GAME_WIDTH / 2, RAID_GAME_HEIGHT / 2 + 28, subtitle, {
               align: "center",
               color: "#c8f7ff",
               fontFamily: "Segoe UI, Arial, sans-serif",
               fontSize: "16px",
-              wordWrap: { width: 430 },
-            },
-          ).setOrigin(0.5);
+              wordWrap: { width: 440 },
+            })
+            .setOrigin(0.5);
+          panel.setDepth(19);
+          titleText.setDepth(20);
+          subtitleText.setDepth(20);
           this.stateOverlayObjects = [panel, titleText, subtitleText];
         }
 
@@ -1755,10 +2291,16 @@ export function PhaserRaidGame({
           title: string,
           subtitle: string,
           durationMs: number,
+          allowedStatuses: RaidStatus[],
         ) {
           this.showStateText(title, subtitle);
+          const overlayId = this.overlaySequence;
+
           this.time.delayedCall(durationMs, () => {
-            if (this.raidStatus === "boss") {
+            if (
+              this.overlaySequence === overlayId &&
+              allowedStatuses.includes(this.raidStatus)
+            ) {
               this.clearStateOverlay();
             }
           });
@@ -1769,6 +2311,101 @@ export function PhaserRaidGame({
           this.stateOverlayObjects = [];
         }
 
+        private syncVisualEffects() {
+          this.playerShadow.setPosition(this.player.x, this.player.y + 15);
+          this.playerShadow.setScale(this.time.now < this.dashUntil ? 0.78 : 1);
+
+          this.enemies.getChildren().forEach((enemyObject: GameObject) => {
+            const enemy = enemyObject as EnemySprite;
+
+            if (!enemy.active || !enemy.shadow) {
+              return;
+            }
+
+            enemy.shadow.setPosition(enemy.x, enemy.y + 14);
+          });
+
+          if (this.boss?.active && this.boss.shadow) {
+            this.boss.shadow.setPosition(this.boss.x, this.boss.y + 22);
+          }
+        }
+
+        private renderProjectileTrails() {
+          this.trailLayer.clear();
+
+          const drawTrail = (bullet: BulletSprite) => {
+            if (!bullet.active) {
+              return;
+            }
+
+            const velocity = bullet.body.velocity;
+            const magnitude = Math.hypot(velocity.x, velocity.y);
+
+            if (magnitude < 1) {
+              return;
+            }
+
+            const alpha = bullet.owner === "player" ? 0.34 : 0.28;
+            const directionX = velocity.x / magnitude;
+            const directionY = velocity.y / magnitude;
+
+            this.trailLayer.lineStyle(
+              bullet.bulletShape === "rail" ? 4 : 3,
+              bullet.trailColor,
+              alpha,
+            );
+            this.trailLayer.beginPath();
+            this.trailLayer.moveTo(bullet.x, bullet.y);
+            this.trailLayer.lineTo(
+              bullet.x - directionX * bullet.trailLength,
+              bullet.y - directionY * bullet.trailLength,
+            );
+            this.trailLayer.strokePath();
+          };
+
+          this.playerBullets.getChildren().forEach((bulletObject: GameObject) => {
+            drawTrail(bulletObject as BulletSprite);
+          });
+          this.enemyBullets.getChildren().forEach((bulletObject: GameObject) => {
+            drawTrail(bulletObject as BulletSprite);
+          });
+        }
+
+        private renderRoomOverlay() {
+          if (!this.lowVisibilityOverlay) {
+            return;
+          }
+
+          this.lowVisibilityOverlay.clear();
+
+          if (
+            this.roomEventModifier !== "LOW_VISIBILITY" ||
+            this.getCurrentRoom().id !== "surge-chamber" ||
+            (this.raidStatus !== "running" && this.raidStatus !== "portal")
+          ) {
+            return;
+          }
+
+          this.lowVisibilityOverlay.fillStyle(0x010206, 0.18);
+          this.lowVisibilityOverlay.fillRect(0, 0, RAID_GAME_WIDTH, RAID_GAME_HEIGHT);
+          this.lowVisibilityOverlay.fillStyle(0x010206, 0.2);
+          this.lowVisibilityOverlay.fillCircle(0, 0, 240);
+          this.lowVisibilityOverlay.fillCircle(RAID_GAME_WIDTH, 0, 240);
+          this.lowVisibilityOverlay.fillCircle(0, RAID_GAME_HEIGHT, 240);
+          this.lowVisibilityOverlay.fillCircle(
+            RAID_GAME_WIDTH,
+            RAID_GAME_HEIGHT,
+            240,
+          );
+          this.lowVisibilityOverlay.lineStyle(2, 0xff8b5a, 0.08);
+          this.lowVisibilityOverlay.strokeRect(
+            RAID_ARENA_PADDING,
+            RAID_ARENA_PADDING,
+            RAID_GAME_WIDTH - RAID_ARENA_PADDING * 2,
+            RAID_GAME_HEIGHT - RAID_ARENA_PADDING * 2,
+          );
+        }
+
         private emitHud(force = false) {
           const time = this.time.now;
 
@@ -1777,28 +2414,36 @@ export function PhaserRaidGame({
           }
 
           this.lastHudAt = time;
+          const room = this.getCurrentRoom();
+
           onHudChange({
+            bossHp: this.boss?.hp ?? 0,
+            bossMaxHp: RAID_BOSS.maxHp,
+            bossMode: this.bossMode,
+            bossModeHistory: this.bossModeHistory,
+            bossPhase: this.bossPhase,
+            currentWeaponId: this.currentWeapon.id,
+            currentWeaponName: this.currentWeapon.name,
+            damageTaken: this.damageTaken,
             dashCooldownRemainingMs: Math.max(
               0,
               this.getDashCooldownMs() - (time - this.lastDashAt),
             ),
             dashReady: time - this.lastDashAt >= this.getDashCooldownMs(),
             enemiesAlive: this.enemies?.countActive(true) ?? 0,
-            damageTaken: this.damageTaken,
             hp: this.hp,
             kills: this.kills,
             maxHp: this.maxHp,
+            roomName: room.name,
+            roomNumber: room.number,
+            roomsCleared: this.roomsCleared,
             score: this.score,
             selectedUpgrades: this.selectedUpgrades,
             status: this.raidStatus,
             statusText: this.statusText,
-            totalWaves: RAID_WAVES.length,
-            wave: RAID_WAVES[this.currentWaveIndex]?.wave ?? RAID_WAVES.length,
-            bossHp: this.boss?.hp ?? 0,
-            bossMaxHp: RAID_BOSS.maxHp,
-            bossPhase: this.bossPhase,
-            bossMode: this.bossMode,
-            bossModeHistory: this.bossModeHistory,
+            totalRooms: RAID_ROOMS.length,
+            totalWaves: RAID_ROOMS.length,
+            wave: room.number,
           });
         }
       }
@@ -1820,13 +2465,13 @@ export function PhaserRaidGame({
           mode: PhaserLib.Scale.FIT,
           autoCenter: PhaserLib.Scale.CENTER_BOTH,
         },
-        scene: RaidScene,
+        scene: [RaidScene],
       };
 
       gameRef.current = new PhaserLib.Game(config);
     }
 
-    bootGame();
+    void bootGame();
 
     return () => {
       isMounted = false;
@@ -1839,8 +2484,8 @@ export function PhaserRaidGame({
     onBossPhaseRequest,
     onHudChange,
     onRaidEnd,
-    onUpgradeOffer,
+    onRewardOffer,
   ]);
 
-  return <div ref={mountRef} className="min-h-[360px] w-full bg-[#02060b]" />;
+  return <div className="aspect-[960/620] w-full overflow-hidden" ref={mountRef} />;
 }

@@ -3,13 +3,13 @@ export const AI_DIRECTOR_SYSTEM_PROMPT =
 
 export const AI_PROMPTS = {
   mission:
-    "Create a mission briefing for a solo cyber roguelite arena raid. Keep it serious, urgent, and readable in a game HUD.",
+    "Create a mission briefing for a solo cyber roguelite chamber raid. Keep it serious, urgent, and readable in a game HUD.",
   event:
-    "Pick one crisis event for Wave 3 based on the run state. Favor drama and fairness over pure punishment.",
+    "Pick one crisis event for the Surge Chamber based on the run state. Favor drama and fairness over pure punishment.",
   bossPhase:
     "Choose the next Blackout Core boss strategy. The Phaser scene controls combat; you only select the mode and phase warning text.",
   debrief:
-    "Write a short final debrief for the completed BLACKOUT RAID run. Mention the result and one tactical improvement.",
+    "Write a short final debrief for the completed BLACKOUT RAID chamber run. Mention the result, final weapon, and one tactical improvement.",
 };
 
 export const AI_SCHEMAS = {

@@ -8,6 +8,7 @@ import {
   BrainCircuit,
   Crown,
   Crosshair,
+  type LucideIcon,
   Radar,
   RotateCcw,
   Shield,
@@ -39,7 +40,11 @@ import {
   validateMissionOutput,
 } from "@/lib/ai/validation";
 import { INITIAL_RAID_HUD } from "@/lib/game/constants";
-import type { RaidHudState, UpgradeOption, UpgradeSelection } from "@/lib/game/types";
+import type {
+  RaidHudState,
+  RewardOption,
+  RewardSelection,
+} from "@/lib/game/types";
 import { PhaserRaidGame } from "./PhaserRaidGame";
 
 type FeedTone = "neutral" | "alert" | "critical";
@@ -55,7 +60,7 @@ const INITIAL_FEED: DirectorFeedEntry[] = [
   {
     id: "boot-sequence",
     title: "AI Director online",
-    body: "Mission uplink established. Awaiting live battlefield data.",
+    body: "Mission uplink established. Awaiting live chamber telemetry.",
     tone: "neutral",
   },
 ];
@@ -67,10 +72,10 @@ export function RaidShell() {
   const [missionLoading, setMissionLoading] = useState(true);
   const [directorFeed, setDirectorFeed] =
     useState<DirectorFeedEntry[]>(INITIAL_FEED);
-  const [upgradeOffers, setUpgradeOffers] = useState<UpgradeOption[] | null>(null);
-  const [upgradeSelection, setUpgradeSelection] =
-    useState<UpgradeSelection | null>(null);
-  const [upgradeSequence, setUpgradeSequence] = useState(0);
+  const [rewardOffers, setRewardOffers] = useState<RewardOption[] | null>(null);
+  const [rewardSelection, setRewardSelection] =
+    useState<RewardSelection | null>(null);
+  const [rewardSequence, setRewardSequence] = useState(0);
   const [aiEventNotice, setAiEventNotice] = useState<{
     directive: AiEventDirective;
     isLoading: boolean;
@@ -82,7 +87,9 @@ export function RaidShell() {
     useState<BossPhaseSelection | null>(null);
   const [debrief, setDebrief] = useState<string | null>(null);
   const bossPhaseSequenceRef = useRef(0);
-  const feedKeysRef = useRef<Set<string>>(new Set(INITIAL_FEED.map((entry) => entry.id)));
+  const feedKeysRef = useRef<Set<string>>(
+    new Set(INITIAL_FEED.map((entry) => entry.id)),
+  );
 
   const pushFeed = useCallback((entry: DirectorFeedEntry) => {
     if (feedKeysRef.current.has(entry.id)) {
@@ -137,35 +144,35 @@ export function RaidShell() {
     setAiEventSequence(0);
     setBossPhaseSelection(null);
     bossPhaseSequenceRef.current = 0;
-    setUpgradeOffers(null);
-    setUpgradeSelection(null);
-    setUpgradeSequence(0);
+    setRewardOffers(null);
+    setRewardSelection(null);
+    setRewardSequence(0);
     setRestartKey((currentKey) => currentKey + 1);
   }
 
-  function handleSelectUpgrade(upgrade: UpgradeOption) {
-    const nextSequence = upgradeSequence + 1;
+  function handleSelectReward(reward: RewardOption) {
+    const nextSequence = rewardSequence + 1;
 
     pushFeed({
-      id: `upgrade-${restartKey}-${nextSequence}`,
-      title: `Upgrade installed: ${upgrade.name}`,
-      body: upgrade.description,
-      tone: "neutral",
+      id: `reward-${restartKey}-${nextSequence}-${reward.id}`,
+      title: buildRewardFeedTitle(reward),
+      body: reward.description,
+      tone: reward.type === "weapon" ? "alert" : "neutral",
     });
-    setUpgradeSequence(nextSequence);
-    setUpgradeSelection({
-      id: upgrade.id,
+    setRewardSequence(nextSequence);
+    setRewardSelection({
+      reward,
       sequence: nextSequence,
     });
-    setUpgradeOffers(null);
+    setRewardOffers(null);
   }
 
   const handleAiEventRequest = useCallback(
     (request: AiEventRequest) => {
       pushFeed({
         id: `event-pending-${restartKey}-${request.wave}`,
-        title: "Wave 3 crisis scan",
-        body: "AI Director is evaluating breach conditions before the core chamber.",
+        title: "Surge Chamber crisis scan",
+        body: "AI Director is evaluating instability before the surge chamber opens.",
         tone: "neutral",
       });
       setAiEventNotice({
@@ -256,7 +263,7 @@ export function RaidShell() {
         setDebrief(directive.debrief);
         pushFeed({
           id: `debrief-${restartKey}-${report.result}`,
-          title: "Mission report ready",
+          title: `Mission report ready: ${report.finalWeapon}`,
           body: directive.debrief,
           tone: "neutral",
         });
@@ -267,7 +274,9 @@ export function RaidShell() {
 
   const hpPercent = Math.max(0, Math.round((hud.hp / hud.maxHp) * 100));
   const bossHpPercent =
-    hud.bossMaxHp > 0 ? Math.max(0, Math.round((hud.bossHp / hud.bossMaxHp) * 100)) : 0;
+    hud.bossMaxHp > 0
+      ? Math.max(0, Math.round((hud.bossHp / hud.bossMaxHp) * 100))
+      : 0;
   const dashLabel = hud.dashReady
     ? "Ready"
     : `${Math.ceil(hud.dashCooldownRemainingMs / 100) / 10}s`;
@@ -290,14 +299,14 @@ export function RaidShell() {
               BLACKOUT RAID
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-7 text-cyan-100/70 sm:text-base">
-              Browser-based cyber raid demo. Read the mission in seconds, clear
-              the breach waves, and fight the AI-directed Blackout Core.
+              Push through corrupted chambers, draft raid rewards, and break the
+              Blackout Core before the uplink collapses.
             </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <HeaderMetric label="Wave" value={`${hud.wave}/${hud.totalWaves}`} />
-            <HeaderMetric label="Score" value={hud.score} />
+            <HeaderMetric label="Room" value={`${hud.roomNumber}/${hud.totalRooms}`} />
+            <HeaderMetric label="Weapon" value={hud.currentWeaponName} />
             <HeaderMetric label="Kills" value={hud.kills} />
             <HeaderMetric label="Status" value={getStatusLabel(hud.status)} />
           </div>
@@ -305,13 +314,17 @@ export function RaidShell() {
 
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="panel-strong cyber-frame relative overflow-hidden px-3 py-3 sm:px-4 sm:py-4">
-            <div className="absolute inset-x-4 top-4 z-10 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+            <div className="pointer-events-none absolute inset-x-4 top-4 z-10 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap gap-2">
-                <CanvasChip icon={Radar} label={`Wave ${hud.wave}/${hud.totalWaves}`} />
+                <CanvasChip
+                  icon={Radar}
+                  label={`Room ${hud.roomNumber}: ${hud.roomName}`}
+                />
                 <CanvasChip icon={Target} label={`${hud.enemiesAlive} hostiles`} />
                 <CanvasChip icon={Shield} label={`Dash ${dashLabel}`} />
               </div>
               <div className="flex flex-wrap gap-2">
+                <CanvasChip icon={Crosshair} label={hud.currentWeaponName} />
                 {showBossHud ? (
                   <CanvasChip
                     icon={Crown}
@@ -319,11 +332,6 @@ export function RaidShell() {
                     tone="warm"
                   />
                 ) : null}
-                <CanvasChip
-                  icon={BrainCircuit}
-                  label={getStatusLabel(hud.status)}
-                  tone={hud.status === "boss" ? "warm" : "cool"}
-                />
               </div>
             </div>
 
@@ -335,8 +343,8 @@ export function RaidShell() {
               onBossPhaseRequest={handleBossPhaseRequest}
               onHudChange={setHud}
               onRaidEnd={handleRaidEnd}
-              onUpgradeOffer={setUpgradeOffers}
-              upgradeSelection={upgradeSelection}
+              onRewardOffer={setRewardOffers}
+              rewardSelection={rewardSelection}
             />
 
             <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -356,11 +364,11 @@ export function RaidShell() {
               </div>
             </div>
 
-            {upgradeOffers ? (
-              <UpgradeOverlay
-                onSelectUpgrade={handleSelectUpgrade}
-                upgrades={upgradeOffers}
-                wave={hud.wave}
+            {rewardOffers ? (
+              <RewardOverlay
+                onSelectReward={handleSelectReward}
+                rewards={rewardOffers}
+                roomName={hud.roomName}
               />
             ) : null}
 
@@ -415,15 +423,32 @@ export function RaidShell() {
                 </div>
 
                 <div className="mt-4 grid grid-cols-2 gap-3">
-                  <MetricTile
-                    icon={Target}
-                    label="Hostiles"
-                    value={hud.enemiesAlive}
-                  />
-                  <MetricTile icon={Zap} label="Dash" value={dashLabel} />
+                  <MetricTile icon={Target} label="Hostiles" value={hud.enemiesAlive} />
+                  <MetricTile icon={Zap} label="Weapon" value={hud.currentWeaponName} />
                   <MetricTile icon={Sparkles} label="Score" value={hud.score} />
-                  <MetricTile icon={Crosshair} label="Kills" value={hud.kills} />
+                  <MetricTile icon={Shield} label="Dash" value={dashLabel} />
                 </div>
+              </div>
+            </section>
+
+            <section className="panel px-5 py-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200/58">
+                    Chamber Route
+                  </p>
+                  <h3 className="font-display mt-2 text-xl font-black uppercase tracking-[0.08em] text-white">
+                    {hud.roomName}
+                  </h3>
+                </div>
+                <div className="status-chip text-cyan-100/76">
+                  Room {hud.roomNumber}/{hud.totalRooms}
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3">
+                <MetricTile icon={Radar} label="Current Chamber" value={hud.roomName} />
+                <MetricTile icon={BrainCircuit} label="Rooms Cleared" value={hud.roomsCleared} />
               </div>
             </section>
 
@@ -535,10 +560,10 @@ export function RaidShell() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200/58">
-                    Upgrade Bank
+                    Installed Upgrades
                   </p>
                   <h3 className="font-display mt-2 text-xl font-black uppercase tracking-[0.08em] text-white">
-                    Installed Modules
+                    Active Modules
                   </h3>
                 </div>
                 <div className="status-chip text-cyan-100/76">
@@ -561,8 +586,7 @@ export function RaidShell() {
                 </div>
               ) : (
                 <p className="mt-4 text-sm leading-7 text-cyan-100/66">
-                  Clear Wave 1 to unlock the first module choice. Clear Wave 2
-                  to shape the boss approach.
+                  Secure the early chambers to start building the run.
                 </p>
               )}
             </section>
@@ -583,8 +607,8 @@ export function RaidShell() {
               <ResultPanel
                 body={
                   hud.status === "victory"
-                    ? "The Blackout Core is offline. The chamber is stable enough to extract."
-                    : "The operator fell before the core could be destroyed. The chamber remains compromised."
+                    ? "The Blackout Core is offline. The chamber route is stable enough to extract."
+                    : "The operator fell before the core could be destroyed. The raid route remains compromised."
                 }
                 debrief={debrief}
                 heading={hud.status === "victory" ? "Core Destroyed" : "Operator Down"}
@@ -610,42 +634,42 @@ export function RaidShell() {
   );
 }
 
-function UpgradeOverlay({
-  onSelectUpgrade,
-  upgrades,
-  wave,
+function RewardOverlay({
+  onSelectReward,
+  rewards,
+  roomName,
 }: {
-  onSelectUpgrade: (upgrade: UpgradeOption) => void;
-  upgrades: UpgradeOption[];
-  wave: number;
+  onSelectReward: (reward: RewardOption) => void;
+  rewards: RewardOption[];
+  roomName: string;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  function handleSelect(upgrade: UpgradeOption) {
+  function handleSelect(reward: RewardOption) {
     if (selectedId) {
       return;
     }
 
-    setSelectedId(upgrade.id);
-    window.setTimeout(() => onSelectUpgrade(upgrade), 160);
+    setSelectedId(reward.id);
+    window.setTimeout(() => onSelectReward(reward), 160);
   }
 
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#02060b]/86 p-4 backdrop-blur-sm">
       <section className="panel-strong w-full max-w-4xl px-5 py-5 sm:px-6">
         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200/62">
-          Wave {wave} cleared
+          {roomName} cleared
         </p>
         <h2 className="font-display mt-2 text-3xl font-black uppercase tracking-[0.08em] text-white sm:text-4xl">
-          Choose One Upgrade
+          Choose Raid Reward
         </h2>
         <p className="mt-3 text-sm leading-7 text-cyan-100/68">
-          Install one combat module before the next breach. Selection applies
-          immediately.
+          Select one weapon, module, or support cache before taking the next
+          portal.
         </p>
         <div className="mt-6 grid gap-3 md:grid-cols-3">
-          {upgrades.map((upgrade) => {
-            const isSelected = selectedId === upgrade.id;
+          {rewards.map((reward) => {
+            const isSelected = selectedId === reward.id;
 
             return (
               <button
@@ -655,27 +679,25 @@ function UpgradeOverlay({
                     ? "border-cyan-200 bg-cyan-300/12 shadow-[0_0_32px_rgba(88,243,255,0.18)]"
                     : "border-cyan-300/18 bg-[#07131c] hover:border-cyan-200 hover:bg-[#0b1d29]",
                 ].join(" ")}
-                key={upgrade.id}
-                onClick={() => handleSelect(upgrade)}
+                key={reward.id}
+                onClick={() => handleSelect(reward)}
                 type="button"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <span className="status-chip text-cyan-100/74">
-                    Module
-                  </span>
+                  <span className="status-chip text-cyan-100/74">{reward.badge}</span>
                   <span className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-cyan-100/42">
-                    {isSelected ? "Installed" : "Pick one"}
+                    {isSelected ? "Applied" : "Choose"}
                   </span>
                 </div>
                 <h3 className="font-display mt-6 text-xl font-black uppercase tracking-[0.08em] text-white">
-                  {upgrade.name}
+                  {reward.name}
                 </h3>
                 <p className="mt-4 text-sm leading-7 text-cyan-100/68">
-                  {upgrade.description}
+                  {reward.description}
                 </p>
                 <div className="mt-6 h-px bg-cyan-300/10" />
                 <p className="mt-4 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-100/55">
-                  {isSelected ? "Loading next wave" : "Install to continue"}
+                  {isSelected ? "Portal unlocking" : "Apply immediately"}
                 </p>
               </button>
             );
@@ -704,7 +726,7 @@ function AiEventOverlay({
               AI Director Crisis Event
             </p>
             <h2 className="font-display mt-2 text-3xl font-black uppercase tracking-[0.08em] text-white">
-              {isLoading ? "Analyzing Wave 3" : directive.eventTitle}
+              {isLoading ? "Analyzing Surge Chamber" : directive.eventTitle}
             </h2>
           </div>
           <div className="status-chip border-orange-300/25 bg-orange-400/10 text-orange-100">
@@ -715,7 +737,7 @@ function AiEventOverlay({
 
         <p className="mt-4 text-sm leading-7 text-orange-100/78">
           {isLoading
-            ? "The AI Director is evaluating your run state. If the uplink stalls, a local failsafe event will deploy automatically."
+            ? "The AI Director is evaluating chamber instability. If the uplink stalls, a local failsafe event will deploy automatically."
             : directive.eventText}
         </p>
 
@@ -734,7 +756,7 @@ function AiEventOverlay({
             onClick={onConfirm}
             type="button"
           >
-            Enter Wave 3
+            Enter Surge Chamber
           </button>
         </div>
       </section>
@@ -789,10 +811,11 @@ function ResultPanel({
         <MetricTile icon={Sparkles} label="Score" value={hud.score} />
         <MetricTile icon={Crosshair} label="Kills" value={hud.kills} />
         <MetricTile icon={ShieldAlert} label="Damage Taken" value={hud.damageTaken} />
-        <MetricTile icon={BrainCircuit} label="Modes Faced" value={hud.bossModeHistory.length || "-"} />
+        <MetricTile icon={Radar} label="Rooms Cleared" value={hud.roomsCleared} />
       </div>
 
       <div className="mt-5 grid gap-3">
+        <ReportBlock body={hud.currentWeaponName} title="Final Weapon" />
         <ReportBlock
           body={
             hud.selectedUpgrades.length > 0
@@ -844,7 +867,7 @@ function MetricTile({
   tone = "cool",
   value,
 }: {
-  icon: typeof Zap;
+  icon: LucideIcon;
   label: string;
   tone?: "cool" | "warm";
   value: number | string;
@@ -852,10 +875,18 @@ function MetricTile({
   return (
     <div className="metric-tile px-4 py-3">
       <div className="flex items-center gap-2">
-        <Icon className={tone === "warm" ? "h-4 w-4 text-orange-200" : "h-4 w-4 text-cyan-200"} />
-        <p className={tone === "warm"
-          ? "text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-orange-100/54"
-          : "text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/54"}>
+        <Icon
+          className={
+            tone === "warm" ? "h-4 w-4 text-orange-200" : "h-4 w-4 text-cyan-200"
+          }
+        />
+        <p
+          className={
+            tone === "warm"
+              ? "text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-orange-100/54"
+              : "text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-cyan-200/54"
+          }
+        >
           {label}
         </p>
       </div>
@@ -869,7 +900,7 @@ function CanvasChip({
   label,
   tone = "cool",
 }: {
-  icon: typeof Radar;
+  icon: LucideIcon;
   label: string;
   tone?: "cool" | "warm";
 }) {
@@ -893,7 +924,7 @@ function ControlRow({
   label,
   value,
 }: {
-  icon: typeof Radar;
+  icon: LucideIcon;
   label: string;
   value: string;
 }) {
@@ -933,8 +964,14 @@ function DirectorFeedCard({ entry }: { entry: DirectorFeedEntry }) {
         <p className="font-display text-sm font-black uppercase tracking-[0.08em] text-white">
           {entry.title}
         </p>
-        <span className={`text-[0.62rem] font-semibold uppercase tracking-[0.18em] ${badgeClasses}`}>
-          {entry.tone === "critical" ? "Critical" : entry.tone === "alert" ? "Priority" : "Live"}
+        <span
+          className={`text-[0.62rem] font-semibold uppercase tracking-[0.18em] ${badgeClasses}`}
+        >
+          {entry.tone === "critical"
+            ? "Critical"
+            : entry.tone === "alert"
+              ? "Priority"
+              : "Live"}
         </span>
       </div>
       <p className="mt-3 text-sm leading-6 text-cyan-100/70">{entry.body}</p>
@@ -958,6 +995,14 @@ function getStatusLabel(status: RaidHudState["status"]): string {
     return "Wipeout";
   }
 
+  if (status === "room-intro") {
+    return "Room intro";
+  }
+
+  if (status === "portal") {
+    return "Portal active";
+  }
+
   if (status === "boss-entry") {
     return "Core inbound";
   }
@@ -970,8 +1015,8 @@ function getStatusLabel(status: RaidHudState["status"]): string {
     return "Victory";
   }
 
-  if (status === "upgrade") {
-    return "Upgrade draft";
+  if (status === "reward") {
+    return "Reward draft";
   }
 
   if (status === "ai-event") {
@@ -997,6 +1042,22 @@ function formatModifier(modifier: AiEventDirective["modifier"]): string {
     .split("_")
     .map((part) => part[0].toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
+}
+
+function buildRewardFeedTitle(reward: RewardOption): string {
+  if (reward.type === "weapon") {
+    return `Weapon acquired: ${reward.name}`;
+  }
+
+  if (reward.type === "upgrade") {
+    return `Upgrade installed: ${reward.name}`;
+  }
+
+  if (reward.type === "repair") {
+    return "Repair kit secured";
+  }
+
+  return "Score cache extracted";
 }
 
 async function requestAiDirector<T>(

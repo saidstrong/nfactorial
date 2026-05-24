@@ -1,6 +1,6 @@
 # BLACKOUT RAID
 
-BLACKOUT RAID is a browser-based cyber roguelite arena shooter built with Next.js, TypeScript, Tailwind, and Phaser 3. The current demo asks the player to survive three enemy waves, draft upgrades, and defeat the adaptive Blackout Core while an AI Director handles mission framing, crisis events, boss phase guidance, and the final debrief.
+BLACKOUT RAID is a browser-based cyber roguelite chamber raid built with Next.js, TypeScript, Tailwind, and Phaser 3. The current demo sends the player through four linked rooms, offers weapons and rewards between portals, and ends with the adaptive Blackout Core while an AI Director handles mission framing, crisis events, boss phase guidance, and the final debrief.
 
 ## Tech stack
 
@@ -13,10 +13,10 @@ BLACKOUT RAID is a browser-based cyber roguelite arena shooter built with Next.j
 ## Core loop
 
 1. Load the mission in the browser.
-2. Survive three escalating breach waves.
-3. Choose one upgrade after Wave 1 and Wave 2.
-4. React to the AI Director Wave 3 crisis event.
-5. Defeat the Blackout Core boss.
+2. Clear the Entry Chamber and draft a reward.
+3. Push through the Drone Chamber and prepare for escalation.
+4. React to the AI Director Surge Chamber crisis event.
+5. Secure the corrupted boss portal and defeat the Blackout Core.
 6. Review the AI debrief on victory or wipeout.
 
 ## Controls
@@ -75,7 +75,7 @@ This build is intended as a clean exam/demo slice rather than a full content-com
 
 - a polished landing page
 - a readable mission-control play shell
-- a fully playable local combat loop
-- upgrade choices between waves
+- a fully playable local chamber raid loop
+- weapon and reward choices between rooms
 - a multi-phase boss fight
 - AI-assisted presentation layered onto deterministic combat systems

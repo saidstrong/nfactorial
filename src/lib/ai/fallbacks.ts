@@ -59,6 +59,7 @@ export type RaidEndReport = {
   kills: number;
   damageTaken: number;
   roomsCleared: number;
+  finalWeapon: string;
   bossModeHistory: string[];
   upgrades: string[];
 };
@@ -77,7 +78,7 @@ export type BossPhaseSelection = {
 export const AI_MISSION_FALLBACK: MissionBriefing = {
   missionTitle: "Nightfall Relay",
   briefing:
-    "A rogue signal has seized the city grid. Enter the corrupted system, clear hostile bots, and destroy the Blackout Core.",
+    "A rogue signal has seized the city grid. Raid through corrupted chambers, clear hostile bots, and destroy the Blackout Core.",
   bossName: "The Blackout Core",
   threatLine: "The blackout spreads every second you hesitate.",
 };
